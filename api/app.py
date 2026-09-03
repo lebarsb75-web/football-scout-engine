@@ -5,7 +5,9 @@ import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
 
-app = FastAPI(title="Football Scout API", version="0.1.0")
+from api.costs import authorization_allows_submission, estimate_cost
+
+app = FastAPI(title="Football Scout API", version="0.2.0")
 
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
@@ -42,27 +44,12 @@ def benchmark_seconds_per_video_minute() -> Optional[float]:
     return value if value > 0 else None
 
 
-def estimate_cost(duration_seconds: float):
-    benchmark = benchmark_seconds_per_video_minute()
-    if benchmark is None:
-        return {
-            "ready": False,
-            "reason": "benchmark_required",
-            "message": "No paid run should be launched until a short benchmark measures real GPU time.",
-        }
-
-    video_minutes = duration_seconds / 60.0
-    estimated_gpu_seconds = video_minutes * benchmark
-    estimated_cost = estimated_gpu_seconds / 3600.0 * GPU_PRICE_PER_HOUR
-    safety_cost = estimated_cost * 1.35
-    return {
-        "ready": True,
-        "gpu_price_per_hour_usd": round(GPU_PRICE_PER_HOUR, 4),
-        "benchmark_gpu_seconds_per_video_minute": round(benchmark, 3),
-        "estimated_gpu_seconds": round(estimated_gpu_seconds, 1),
-        "estimated_cost_usd": round(estimated_cost, 4),
-        "recommended_max_authorization_usd": round(safety_cost, 4),
-    }
+def build_estimate(duration_seconds: float):
+    return estimate_cost(
+        duration_seconds=duration_seconds,
+        gpu_price_per_hour=GPU_PRICE_PER_HOUR,
+        gpu_seconds_per_video_minute=benchmark_seconds_per_video_minute(),
+    )
 
 
 @app.get("/health")
@@ -77,7 +64,7 @@ def health():
 
 @app.post("/analysis/estimate")
 def analysis_estimate(request: AnalysisRequest):
-    return estimate_cost(request.video_duration_seconds)
+    return build_estimate(request.video_duration_seconds)
 
 
 @app.post("/analysis/submit")
@@ -90,15 +77,14 @@ def analysis_submit(request: SubmitRequest):
     if not RUNPOD_ENDPOINT_ID or not RUNPOD_API_KEY:
         raise HTTPException(status_code=503, detail="RunPod is not configured")
 
-    estimate = estimate_cost(request.video_duration_seconds)
+    estimate = build_estimate(request.video_duration_seconds)
     if not estimate.get("ready"):
         raise HTTPException(
             status_code=412,
             detail="A measured short-video benchmark is required before paid execution.",
         )
 
-    recommended_limit = estimate["recommended_max_authorization_usd"]
-    if recommended_limit > request.approved_max_cost_usd:
+    if not authorization_allows_submission(estimate, request.approved_max_cost_usd):
         raise HTTPException(
             status_code=412,
             detail={
