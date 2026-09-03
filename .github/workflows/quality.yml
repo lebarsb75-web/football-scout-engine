@@ -16,12 +16,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install free test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
       - name: Python syntax
         run: |
           python -m py_compile handler.py
           python -m py_compile api/app.py
           python -m py_compile api/costs.py
           python -m py_compile api/security.py
+          python -m py_compile api/idempotency.py
           python -m py_compile scripts/build_clips.py
           python -m py_compile scripts/render_report.py
           python -m py_compile scripts/cost_from_result.py
@@ -59,8 +62,9 @@ jobs:
           assert 'VIDEO_HOST_ALLOWLIST=' in env
           assert 'approval_secret_matches' in app
           assert 'validate_video_url_for_submission' in app
+          assert 'X-Idempotency-Key' in app
           assert 'ENABLE_PAID_GPU = os.getenv("ENABLE_PAID_GPU", "false")' in app
-          print('Independent cost and URL safety gates OK')
+          print('Independent cost, URL and duplicate-submission gates OK')
           PY
       - name: Check web prototype files
         run: |
