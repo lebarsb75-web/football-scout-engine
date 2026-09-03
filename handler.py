@@ -401,7 +401,9 @@ def analyze_video(data):
                         rejected_jumps += 1
                 previous_center = smoothed_center
 
-                current_signature = player.get("signature") or appearance_signature(frame, player["box"])
+                current_signature = player.get("signature")
+                if current_signature is None:
+                    current_signature = appearance_signature(frame, player["box"])
                 if current_signature is not None and (reference_signature is None or app_score >= 0.42):
                     reference_signature = blend_signature(reference_signature, current_signature)
 
