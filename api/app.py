@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Optional
 
 import requests
@@ -6,13 +7,14 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from api.costs import authorization_allows_submission, estimate_cost
+from api.idempotency import IdempotencyStore
 from api.security import (
     approval_secret_configured,
     approval_secret_matches,
     validate_video_url_for_submission,
 )
 
-app = FastAPI(title="Football Scout API", version="0.3.0")
+app = FastAPI(title="Football Scout API", version="0.4.0")
 
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
@@ -21,6 +23,8 @@ GPU_PRICE_PER_HOUR = float(os.getenv("GPU_PRICE_PER_HOUR", "0.58"))
 BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE = os.getenv(
     "BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE"
 )
+IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{12,128}$")
+SUBMISSION_CACHE = IdempotencyStore()
 
 
 class Target(BaseModel):
@@ -63,6 +67,18 @@ def build_estimate(duration_seconds: float):
     )
 
 
+def validate_idempotency_key(value: str | None) -> str:
+    if not value or not IDEMPOTENCY_KEY_PATTERN.fullmatch(value):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-Idempotency-Key is required and must contain 12-128 safe characters. "
+                "Reuse the same key only when retrying the exact same submission."
+            ),
+        )
+    return value
+
+
 @app.get("/health")
 def health():
     return {
@@ -72,6 +88,7 @@ def health():
         "benchmark_available": benchmark_seconds_per_video_minute() is not None,
         "cost_approval_guard_configured": approval_secret_configured(),
         "video_host_allowlist_configured": bool(os.getenv("VIDEO_HOST_ALLOWLIST", "").strip()),
+        "idempotency_guard": "process_local",
     }
 
 
@@ -84,9 +101,20 @@ def analysis_estimate(request: AnalysisRequest):
 def analysis_submit(
     request: SubmitRequest,
     x_cost_approval_secret: str | None = Header(default=None),
+    x_idempotency_key: str | None = Header(default=None),
 ):
     # This endpoint intentionally fails closed behind several independent gates.
     # Changing only ENABLE_PAID_GPU is not sufficient to spend GPU credit.
+    idempotency_key = validate_idempotency_key(x_idempotency_key)
+    request_payload = request.model_dump(mode="json")
+
+    try:
+        cached = SUBMISSION_CACHE.get(idempotency_key, request_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if cached is not None:
+        return {**cached, "idempotent_replay": True}
+
     if not ENABLE_PAID_GPU:
         raise HTTPException(
             status_code=423,
@@ -146,4 +174,12 @@ def analysis_submit(
             status_code=502,
             detail={"message": "RunPod rejected the job", "body": response.text[:1000]},
         )
-    return {"submitted": True, "cost_estimate": estimate, "runpod": response.json()}
+
+    result = {
+        "submitted": True,
+        "idempotent_replay": False,
+        "cost_estimate": estimate,
+        "runpod": response.json(),
+    }
+    SUBMISSION_CACHE.put(idempotency_key, request_payload, result)
+    return result
