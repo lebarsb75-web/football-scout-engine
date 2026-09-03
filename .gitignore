@@ -1,0 +1,29 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+api/.env
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local uploads, generated clips and reports
+uploads/
+output/
+outputs/
+clips/
+reports/
+*.mp4
+*.mov
+*.mkv
+*.avi
+
+# Local tooling / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
