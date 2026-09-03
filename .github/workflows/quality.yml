@@ -25,6 +25,7 @@ jobs:
           python -m py_compile api/costs.py
           python -m py_compile api/security.py
           python -m py_compile api/idempotency.py
+          python -m py_compile api/results.py
           python -m py_compile scripts/build_clips.py
           python -m py_compile scripts/render_report.py
           python -m py_compile scripts/cost_from_result.py
