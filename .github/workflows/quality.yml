@@ -13,8 +13,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Python syntax
-        run: python -m py_compile handler.py
+        run: |
+          python -m py_compile handler.py
+          python -m py_compile api/app.py
+          python -m py_compile scripts/build_clips.py
+          python -m py_compile scripts/render_report.py
+      - name: JavaScript syntax
+        run: node --check web/app.js
       - name: Validate JSON contracts
         run: |
           python - <<'PY'
@@ -33,6 +42,14 @@ jobs:
           assert 'runpod.serverless.start' in code
           assert 'handler.py' in dockerfile
           print('RunPod contract OK')
+          PY
+      - name: Enforce paid GPU lock default
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          env = Path('api/.env.example').read_text(encoding='utf-8')
+          assert 'ENABLE_PAID_GPU=false' in env
+          print('Cost gate default OK')
           PY
       - name: Check web prototype files
         run: |
