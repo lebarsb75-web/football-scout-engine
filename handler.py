@@ -36,7 +36,7 @@ def euclidean(a, b):
 def download_video(url: str, destination: Path, max_mb: int = 4096) -> int:
     max_bytes = max_mb * 1024 * 1024
     written = 0
-    headers = {"User-Agent": "football-scout-engine/2.0"}
+    headers = {"User-Agent": "football-scout-engine/2.1"}
     with requests.get(url, stream=True, timeout=(30, 300), headers=headers) as response:
         response.raise_for_status()
         content_length = response.headers.get("content-length")
@@ -64,8 +64,9 @@ def safe_crop(frame, box, torso_only=True):
         return None
     if torso_only:
         bh = y2 - y1
-        y1 = y1 + int(0.12 * bh)
-        y2 = y1 + int(0.48 * bh)
+        torso_top = y1 + int(0.12 * bh)
+        torso_bottom = y1 + int(0.60 * bh)
+        y1, y2 = torso_top, max(torso_top + 1, torso_bottom)
     crop = frame[y1:y2, x1:x2]
     return crop if crop.size else None
 
@@ -87,7 +88,7 @@ def appearance_similarity(reference, candidate):
     return float(max(0.0, 1.0 - distance))
 
 
-def blend_signature(reference, candidate, alpha=0.08):
+def blend_signature(reference, candidate, alpha=0.06):
     if candidate is None:
         return reference
     if reference is None:
@@ -116,10 +117,11 @@ def parse_detections(result):
     boxes = result.boxes.xyxy.cpu().tolist()
     classes = result.boxes.cls.int().cpu().tolist()
     confidences = result.boxes.conf.cpu().tolist()
-    if result.boxes.id is not None:
-        ids = result.boxes.id.int().cpu().tolist()
-    else:
-        ids = [None] * len(boxes)
+    ids = (
+        result.boxes.id.int().cpu().tolist()
+        if result.boxes.id is not None
+        else [None] * len(boxes)
+    )
     for box, cls, conf, track_id in zip(boxes, classes, confidences, ids):
         item = {
             "box": box,
@@ -160,19 +162,24 @@ def choose_reidentified_player(frame, people, previous_center, reference_signatu
             motion_distance = euclidean(person["center"], previous_center) / diag
             motion = max(0.0, 1.0 - motion_distance / 0.16)
         size = max(1.0, person["box"][3] - person["box"][1]) / max(1.0, frame.shape[0])
-        score = 0.62 * app + 0.30 * motion + 0.05 * person["confidence"] + 0.03 * min(size * 10.0, 1.0)
+        score = (
+            0.64 * app
+            + 0.28 * motion
+            + 0.05 * person["confidence"]
+            + 0.03 * min(size * 10.0, 1.0)
+        )
         scored.append((score, app, person, signature))
     scored.sort(key=lambda row: row[0], reverse=True)
-    best = scored[0]
-    if best[0] < 0.38:
-        return None, best[0]
-    best[2]["signature"] = best[3]
-    best[2]["appearance_similarity"] = best[1]
-    return best[2], best[0]
+    best_score, best_app, best_person, best_signature = scored[0]
+    if best_score < 0.40 or (reference_signature is not None and best_app < 0.25):
+        return None, best_score
+    best_person["signature"] = best_signature
+    best_person["appearance_similarity"] = best_app
+    return best_person, best_score
 
 
 def make_homography(calibration):
-    if not calibration:
+    if not calibration or calibration.get("static_camera") is not True:
         return None
     image_points = calibration.get("image_points")
     pitch_points = calibration.get("pitch_points_meters")
@@ -180,7 +187,9 @@ def make_homography(calibration):
         return None
     src = np.array(image_points, dtype=np.float32)
     dst = np.array(pitch_points, dtype=np.float32)
-    if src.shape[1] != 2 or dst.shape[1] != 2 or src.shape[0] != dst.shape[0]:
+    if src.ndim != 2 or dst.ndim != 2 or src.shape[1] != 2 or dst.shape[1] != 2:
+        return None
+    if src.shape[0] != dst.shape[0]:
         return None
     matrix, _ = cv2.findHomography(src, dst, method=0)
     return matrix
@@ -204,6 +213,18 @@ def ball_close_to_player(ball, player):
     vertical = abs(by - py) / player_height
     normalized_distance = math.hypot(horizontal, vertical)
     return normalized_distance < 1.05
+
+
+def merge_windows(timestamps, duration, before=4.0, after=4.0, merge_gap=1.5):
+    windows = []
+    for timestamp in timestamps:
+        start = max(0.0, float(timestamp) - before)
+        end = min(float(duration), float(timestamp) + after)
+        if not windows or start > windows[-1][1] + merge_gap:
+            windows.append([start, end])
+        else:
+            windows[-1][1] = max(windows[-1][1], end)
+    return [[round(start, 2), round(end, 2)] for start, end in windows]
 
 
 def analyze_video(data):
@@ -279,6 +300,7 @@ def analyze_video(data):
         tracked_samples = 0
         sampled_frames = 0
         reidentifications = 0
+        identity_rejections = 0
         scene_cuts = 0
         rejected_jumps = 0
         possession_samples = 0
@@ -289,6 +311,7 @@ def analyze_video(data):
         previous_ball_close = False
         last_touch_time = -10.0
         track_scores = []
+        appearance_scores = []
         frame_index = 0
 
         while capture.isOpened():
@@ -327,7 +350,18 @@ def analyze_video(data):
             player = None
             match_score = 1.0
             if selected_track_id is not None:
-                player = next((p for p in people if p["id"] == selected_track_id), None)
+                candidate = next((p for p in people if p["id"] == selected_track_id), None)
+                if candidate is not None:
+                    candidate_signature = appearance_signature(frame, candidate["box"])
+                    candidate_app = appearance_similarity(reference_signature, candidate_signature)
+                    if reference_signature is None or candidate_app >= 0.20:
+                        candidate["signature"] = candidate_signature
+                        candidate["appearance_similarity"] = candidate_app
+                        player = candidate
+                        match_score = 0.70 + 0.30 * candidate_app
+                    else:
+                        identity_rejections += 1
+                        selected_track_id = None
 
             if player is None:
                 player, match_score = choose_reidentified_player(
@@ -341,6 +375,10 @@ def analyze_video(data):
             if player is not None:
                 tracked_samples += 1
                 track_scores.append(float(match_score))
+                app_score = float(player.get("appearance_similarity", 0.0))
+                if reference_signature is not None:
+                    appearance_scores.append(app_score)
+
                 raw_center = player["center"]
                 if smoothed_center is None:
                     smoothed_center = raw_center
@@ -353,17 +391,18 @@ def analyze_video(data):
 
                 if previous_center is not None:
                     step_px = euclidean(smoothed_center, previous_center)
-                    max_step_px = max(width * 0.045, (player["box"][3] - player["box"][1]) * 1.7)
+                    max_step_px = max(
+                        width * 0.045,
+                        (player["box"][3] - player["box"][1]) * 1.7,
+                    )
                     if step_px <= max_step_px:
                         pixel_path += step_px
                     else:
                         rejected_jumps += 1
                 previous_center = smoothed_center
 
-                current_signature = appearance_signature(frame, player["box"])
-                if getattr(player, "appearance_similarity", None) is not None:
-                    pass
-                if current_signature is not None:
+                current_signature = player.get("signature") or appearance_signature(frame, player["box"])
+                if current_signature is not None and (reference_signature is None or app_score >= 0.42):
                     reference_signature = blend_signature(reference_signature, current_signature)
 
                 pitch_point = project_to_pitch(player["foot"], homography)
@@ -412,19 +451,30 @@ def analyze_video(data):
         coverage = tracked_samples / max(1, sampled_frames) * 100.0
         ball_visibility = ball_visible_samples / max(1, sampled_frames) * 100.0
         mean_track_score = sum(track_scores) / max(1, len(track_scores))
-        quality_score = 0.72 * min(coverage / 90.0, 1.0) + 0.18 * min(ball_visibility / 45.0, 1.0) + 0.10 * min(mean_track_score, 1.0)
+        mean_appearance = sum(appearance_scores) / max(1, len(appearance_scores))
+        quality_score = (
+            0.62 * min(coverage / 90.0, 1.0)
+            + 0.18 * min(ball_visibility / 45.0, 1.0)
+            + 0.12 * min(mean_track_score, 1.0)
+            + 0.08 * min(mean_appearance / 0.70, 1.0)
+        )
         quality_score = round(quality_score * 100.0, 1)
 
-        if quality_score >= 82:
+        if quality_score >= 82 and coverage >= 80:
             quality_label = "good"
-        elif quality_score >= 65:
+        elif quality_score >= 65 and coverage >= 60:
             quality_label = "usable_with_review"
         else:
             quality_label = "insufficient"
 
+        ball_metrics_reliable = coverage >= 75 and ball_visibility >= 35 and quality_score >= 70
+        touch_windows = merge_windows(touch_events, duration)
+        tracked_seconds = tracked_samples / sample_fps
+        possession_seconds = possession_samples / sample_fps
+
         result = {
             "status": "completed",
-            "engine_version": "2.0-dev",
+            "engine_version": "2.1-dev",
             "model": MODEL_NAME,
             "processing_seconds": round(time.time() - started, 2),
             "video": {
@@ -447,23 +497,32 @@ def analyze_video(data):
             "player": {
                 "last_track_id": selected_track_id,
                 "tracking_coverage_percent": round(coverage, 1),
+                "tracked_seconds_estimated": round(tracked_seconds, 1),
                 "reidentifications": reidentifications,
+                "identity_rejections": identity_rejections,
                 "distance_pixels_estimated": round(pixel_path, 1),
                 "ball_touches_estimated": len(touch_events),
                 "touch_timestamps_seconds": touch_events,
-                "possession_seconds_estimated": round(possession_samples / sample_fps, 1),
+                "touch_clip_windows_seconds": touch_windows,
+                "possession_seconds_estimated": round(possession_seconds, 1),
                 "possession_intervals_seconds": possession_intervals,
+                "possession_percent_of_tracked_time": round(
+                    possession_seconds / max(0.001, tracked_seconds) * 100.0, 1
+                ),
             },
             "quality": {
                 "score_percent": quality_score,
                 "label": quality_label,
+                "review_required": quality_label != "good",
+                "ball_metrics_reliable": ball_metrics_reliable,
                 "ball_visibility_percent": round(ball_visibility, 1),
+                "mean_identity_appearance_similarity": round(mean_appearance, 3),
                 "scene_cuts_detected": scene_cuts,
                 "rejected_tracking_jumps": rejected_jumps,
             },
             "warnings": [
-                "Touches and possession remain computer-vision estimates and must be validated before commercial use.",
-                "A single broadcast camera cannot guarantee perfect player identity after occlusions or cuts without stronger re-identification.",
+                "Touches and possession remain computer-vision estimates until validated against labelled match footage.",
+                "A single broadcast camera cannot guarantee perfect player identity after occlusions or cuts without a dedicated re-identification model.",
             ],
         }
 
@@ -473,7 +532,12 @@ def analyze_video(data):
         else:
             result["quality"]["pitch_calibration_used"] = False
             result["warnings"].append(
-                "Metric distance is intentionally omitted until pitch calibration points are supplied."
+                "Metric distance is omitted unless a static-camera pitch calibration with at least four point correspondences is supplied."
+            )
+
+        if not ball_metrics_reliable:
+            result["warnings"].append(
+                "Ball-derived metrics are below the reliability gate and should not be displayed as verified statistics."
             )
 
         return result
@@ -488,7 +552,7 @@ def handler(job):
             "status": "error",
             "error_type": type(exc).__name__,
             "error": str(exc),
-            "engine_version": "2.0-dev",
+            "engine_version": "2.1-dev",
         }
 
 
