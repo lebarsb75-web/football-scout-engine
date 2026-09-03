@@ -1,0 +1,41 @@
+name: quality
+
+on:
+  push:
+    branches: [main, dev-v2]
+  pull_request:
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python syntax
+        run: python -m py_compile handler.py
+      - name: Validate JSON contracts
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for path in Path('contracts').glob('*.json'):
+              json.loads(path.read_text(encoding='utf-8'))
+              print(f'OK {path}')
+          PY
+      - name: Check RunPod entrypoint
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          code = Path('handler.py').read_text(encoding='utf-8')
+          dockerfile = Path('Dockerfile').read_text(encoding='utf-8')
+          assert 'runpod.serverless.start' in code
+          assert 'handler.py' in dockerfile
+          print('RunPod contract OK')
+          PY
+      - name: Check web prototype files
+        run: |
+          test -f web/index.html
+          test -f web/styles.css
+          test -f web/app.js
