@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 from fastapi import FastAPI, Header, HTTPException
@@ -8,13 +8,14 @@ from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from api.costs import authorization_allows_submission, estimate_cost
 from api.idempotency import IdempotencyStore
+from api.results import public_result
 from api.security import (
     approval_secret_configured,
     approval_secret_matches,
     validate_video_url_for_submission,
 )
 
-app = FastAPI(title="Football Scout API", version="0.4.0")
+app = FastAPI(title="Football Scout API", version="0.5.0")
 
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
@@ -50,6 +51,10 @@ class AnalysisRequest(BaseModel):
 
 class SubmitRequest(AnalysisRequest):
     approved_max_cost_usd: float = Field(gt=0, le=25)
+
+
+class EngineResultPreviewRequest(BaseModel):
+    engine_result: dict[str, Any]
 
 
 def benchmark_seconds_per_video_minute() -> Optional[float]:
@@ -95,6 +100,12 @@ def health():
 @app.post("/analysis/estimate")
 def analysis_estimate(request: AnalysisRequest):
     return build_estimate(request.video_duration_seconds)
+
+
+@app.post("/analysis/result/preview")
+def analysis_result_preview(request: EngineResultPreviewRequest):
+    """Free/local transformation of raw engine output into user-safe metrics."""
+    return public_result(request.engine_result)
 
 
 @app.post("/analysis/submit")
