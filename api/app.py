@@ -2,12 +2,17 @@ import os
 from typing import Optional
 
 import requests
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, HttpUrl
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from api.costs import authorization_allows_submission, estimate_cost
+from api.security import (
+    approval_secret_configured,
+    approval_secret_matches,
+    validate_video_url_for_submission,
+)
 
-app = FastAPI(title="Football Scout API", version="0.2.0")
+app = FastAPI(title="Football Scout API", version="0.3.0")
 
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
@@ -31,6 +36,12 @@ class AnalysisRequest(BaseModel):
     sample_fps: float = Field(default=5, ge=1, le=10)
     confidence: float = Field(default=0.22, ge=0.1, le=0.9)
     image_size: int = Field(default=960, ge=640, le=1280)
+
+    @model_validator(mode="after")
+    def selected_frame_must_be_inside_video(self):
+        if self.target_time_seconds >= self.video_duration_seconds:
+            raise ValueError("target_time_seconds must be inside the video duration")
+        return self
 
 
 class SubmitRequest(AnalysisRequest):
@@ -59,6 +70,8 @@ def health():
         "paid_gpu_enabled": ENABLE_PAID_GPU,
         "runpod_configured": bool(RUNPOD_ENDPOINT_ID and RUNPOD_API_KEY),
         "benchmark_available": benchmark_seconds_per_video_minute() is not None,
+        "cost_approval_guard_configured": approval_secret_configured(),
+        "video_host_allowlist_configured": bool(os.getenv("VIDEO_HOST_ALLOWLIST", "").strip()),
     }
 
 
@@ -68,14 +81,31 @@ def analysis_estimate(request: AnalysisRequest):
 
 
 @app.post("/analysis/submit")
-def analysis_submit(request: SubmitRequest):
+def analysis_submit(
+    request: SubmitRequest,
+    x_cost_approval_secret: str | None = Header(default=None),
+):
+    # This endpoint intentionally fails closed behind several independent gates.
+    # Changing only ENABLE_PAID_GPU is not sufficient to spend GPU credit.
     if not ENABLE_PAID_GPU:
         raise HTTPException(
             status_code=423,
             detail="Paid GPU execution is locked. Set ENABLE_PAID_GPU=true only after explicit approval.",
         )
+    if not approval_secret_configured():
+        raise HTTPException(
+            status_code=423,
+            detail="Paid GPU execution is locked until COST_APPROVAL_SECRET is configured.",
+        )
+    if not approval_secret_matches(x_cost_approval_secret):
+        raise HTTPException(status_code=403, detail="Invalid cost approval secret")
     if not RUNPOD_ENDPOINT_ID or not RUNPOD_API_KEY:
         raise HTTPException(status_code=503, detail="RunPod is not configured")
+
+    try:
+        validate_video_url_for_submission(str(request.video_url))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     estimate = build_estimate(request.video_duration_seconds)
     if not estimate.get("ready"):
