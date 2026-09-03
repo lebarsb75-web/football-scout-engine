@@ -21,10 +21,11 @@ jobs:
           python -m py_compile handler.py
           python -m py_compile api/app.py
           python -m py_compile api/costs.py
+          python -m py_compile api/security.py
           python -m py_compile scripts/build_clips.py
           python -m py_compile scripts/render_report.py
           python -m py_compile scripts/cost_from_result.py
-      - name: Cost-control unit tests
+      - name: Unit tests
         run: python -m unittest discover -s tests -p 'test_*.py'
       - name: JavaScript syntax
         run: node --check web/app.js
@@ -47,13 +48,19 @@ jobs:
           assert 'handler.py' in dockerfile
           print('RunPod contract OK')
           PY
-      - name: Enforce paid GPU lock default
+      - name: Enforce paid GPU locks
         run: |
           python - <<'PY'
           from pathlib import Path
           env = Path('api/.env.example').read_text(encoding='utf-8')
+          app = Path('api/app.py').read_text(encoding='utf-8')
           assert 'ENABLE_PAID_GPU=false' in env
-          print('Cost gate default OK')
+          assert 'COST_APPROVAL_SECRET=' in env
+          assert 'VIDEO_HOST_ALLOWLIST=' in env
+          assert 'approval_secret_matches' in app
+          assert 'validate_video_url_for_submission' in app
+          assert 'ENABLE_PAID_GPU = os.getenv("ENABLE_PAID_GPU", "false")' in app
+          print('Independent cost and URL safety gates OK')
           PY
       - name: Check web prototype files
         run: |
