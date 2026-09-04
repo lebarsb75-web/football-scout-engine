@@ -1,11 +1,11 @@
 {
   "input": {
-    "video_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/2018_FIFA_U-17_Women%27s_World_Cup_-_New_Zealand_vs_Canada_-_20.webm",
-    "target_time_seconds": 8.0,
+    "video_url": "https://raw.githubusercontent.com/AtomScott/SoccerTrack-v2/main/docs/assets/demo-tracking.mp4",
+    "target_time_seconds": 2.0,
     "target": {"x": 0.5, "y": 0.55},
-    "sample_fps": 5,
+    "sample_fps": 4,
     "confidence": 0.22,
     "image_size": 960,
-    "max_video_mb": 100
+    "max_video_mb": 20
   }
 }
