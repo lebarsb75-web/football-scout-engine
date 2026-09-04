@@ -26,6 +26,7 @@ jobs:
           python -m py_compile api/security.py
           python -m py_compile api/idempotency.py
           python -m py_compile api/results.py
+          python -m py_compile api/jobs.py
           python -m py_compile scripts/build_clips.py
           python -m py_compile scripts/render_report.py
           python -m py_compile scripts/cost_from_result.py
@@ -66,6 +67,18 @@ jobs:
           assert 'X-Idempotency-Key' in app
           assert 'ENABLE_PAID_GPU = os.getenv("ENABLE_PAID_GPU", "false")' in app
           print('Independent cost, URL and duplicate-submission gates OK')
+          PY
+      - name: Check local job registry
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          app = Path('api/app.py').read_text(encoding='utf-8')
+          jobs = Path('api/jobs.py').read_text(encoding='utf-8')
+          assert 'JobStore' in app
+          assert '/analysis/jobs' in app
+          assert 'provider_job_id' in jobs
+          assert 'data.pop("provider_job_id", None)' in jobs
+          print('Persistent local job registry contract OK')
           PY
       - name: Check web prototype files
         run: |
