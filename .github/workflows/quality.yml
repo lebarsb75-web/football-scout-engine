@@ -21,6 +21,8 @@ jobs:
       - name: Python syntax
         run: |
           python -m py_compile handler.py
+          python -m py_compile engine_quality.py
+          python -m py_compile engine_tracking.py
           python -m py_compile api/app.py
           python -m py_compile api/costs.py
           python -m py_compile api/security.py
@@ -39,7 +41,8 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-          for path in Path('contracts').glob('*.json'):
+          paths = list(Path('contracts').glob('*.json')) + list(Path('benchmarks').glob('*.json'))
+          for path in paths:
               json.loads(path.read_text(encoding='utf-8'))
               print(f'OK {path}')
           PY
@@ -51,6 +54,8 @@ jobs:
           dockerfile = Path('Dockerfile').read_text(encoding='utf-8')
           assert 'runpod.serverless.start' in code
           assert 'handler.py' in dockerfile
+          assert 'engine_quality.py' in dockerfile
+          assert 'engine_tracking.py' in dockerfile
           print('RunPod contract OK')
           PY
       - name: Enforce paid GPU locks

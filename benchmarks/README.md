@@ -27,9 +27,9 @@ The first paid smoke test therefore validated the full request/download/inferenc
 
 Measured execution ratio for this smoke test: about 336 GPU execution seconds per video minute (`37.13 / (6.63 / 60)`). This is only a cold-start/ultra-short benchmark and must not be extrapolated blindly to a 90-minute match; representative longer benchmarks are required.
 
-## V2.2 changes after Test 01
+## V2.4 changes after Test 01
 
-Before any second paid test, `handler.py` was upgraded to `2.2-dev` with stricter safeguards:
+Before any new paid test, `handler.py` was upgraded to `2.4-dev` with stricter safeguards:
 
 - player re-identification now combines appearance, motion and bounding-box size consistency;
 - same-ID candidates are rejected on implausible motion or weak appearance similarity;
@@ -38,6 +38,10 @@ Before any second paid test, `handler.py` was upgraded to `2.2-dev` with stricte
 - ball reliability now uses a stricter gate and requires at least 30 sampled frames;
 - player tracking quality is reported separately from overall quality;
 - scene cuts reset ball continuity and motion state.
+- BoT-SORT compensates camera motion on broadcast/panoramic footage;
+- sampling is timestamp-based and exact, including when source FPS differs from the request;
+- trackers are reset explicitly between serverless jobs;
+- the public API requires window coverage, maximum gap and identity-churn gates.
 
 No RunPod request is triggered by these changes.
 
@@ -45,22 +49,36 @@ No RunPod request is triggered by these changes.
 
 Run only after explicit user approval.
 
-Source: Wikimedia Commons — `2018 FIFA U-17 Women's World Cup - New Zealand vs Canada - 20.webm`
+Source: SoccerTrack v2 public demo — `demo-gsr_and_bas.mp4`
 
-- duration: 37.544 s
-- resolution: 1280 × 720
-- license: CC BY-SA 4.0
-- author: NaBUru38
-- source page: https://commons.wikimedia.org/wiki/File:2018_FIFA_U-17_Women%27s_World_Cup_-_New_Zealand_vs_Canada_-_20.webm
+- duration: 30 s (26 s analyzed after the selection frame)
+- resolution: 4096 × 1080
+- source: https://github.com/AtomScott/SoccerTrack-v2/blob/main/docs/assets/demo-gsr_and_bas.mp4
+- request: 10 fps, 960 px inference, 260 exact samples
 
-This is much more representative of the intended product: a real match with multiple players on a pitch. It is used to inspect player identity recovery, ball visibility and timing performance.
+This panoramic footage is more representative of a full-match camera than the lower-resolution overlay demo. It is used to inspect identity continuity, ball visibility and timing performance. Its public video has no frame-level ground truth in this repository, so passing the automatic gate is not an accuracy claim.
+
+## Free local V2.4 baseline
+
+`local-panoramic-v24.json` records the reproducible local CPU result:
+
+- 97.3% tracking coverage;
+- 97.3% minimum-window coverage;
+- 0.7 s longest untracked gap;
+- 96.5% player tracking score;
+- 5.0% re-identification rate;
+- internal tracking continuity gate passed;
+- 9.2% ball visibility, therefore ball metrics failed closed;
+- no metric distance without pitch calibration.
+
+The next GPU run must reproduce or improve the tracking diagnostics. Validation against labelled footage remains mandatory before a full-match reliability claim.
 
 ## Sequence
 
 1. Keep `main` untouched.
 2. Use `dev-v2` as the test version.
 3. Confirm at most one worker and no unintended queued jobs.
-4. Obtain explicit user approval before every paid request.
+4. Stay inside the previously approved first-test ceiling (~USD 0.05); notify the user before any higher spend.
 5. Run the shortest relevant benchmark first.
 6. Record RunPod execution time, result quality and actual billing signals.
 7. Stop if the result is technically broken or unexpectedly slow.
@@ -69,4 +87,4 @@ This is much more representative of the intended product: a real match with mult
 
 ## Why these clips
 
-They are publicly accessible, short, football-specific and reusable under Creative Commons terms. The first is intentionally tiny to validate plumbing cheaply; the second is a real match segment for a meaningful first quality check.
+They are publicly accessible, short and football-specific. The first is intentionally tiny to validate plumbing cheaply; the second is panoramic match footage for a meaningful continuity check.

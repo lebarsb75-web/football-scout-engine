@@ -9,7 +9,14 @@ import requests
 import runpod
 from ultralytics import YOLO
 
-ENGINE_VERSION = "2.3-dev"
+from engine_quality import (
+    ball_metrics_are_reliable,
+    classify_tracking_quality,
+    summarize_tracking_samples,
+)
+from engine_tracking import iter_sample_frame_indices, reset_model_trackers
+
+ENGINE_VERSION = "2.4-dev"
 MODEL_NAME = "yolo11m.pt"
 MODEL = YOLO(MODEL_NAME)
 PERSON_CLASS = 0
@@ -250,7 +257,7 @@ def analyze_video(data):
 
     target = data.get("target", {"x": 0.5, "y": 0.5})
     target_time = max(0.0, float(data.get("target_time_seconds", 0.0)))
-    sample_fps = clamp(data.get("sample_fps", 5), 1.0, 10.0)
+    requested_sample_fps = clamp(data.get("sample_fps", 5), 1.0, 10.0)
     confidence = clamp(data.get("confidence", 0.22), 0.1, 0.9)
     image_size = int(clamp(data.get("image_size", 960), 640, 1280))
     max_video_mb = int(clamp(data.get("max_video_mb", 4096), 100, 8192))
@@ -301,6 +308,12 @@ def analyze_video(data):
 
         reference_signature = appearance_signature(anchor_frame, anchor_player["box"])
         anchor_distance_px = euclidean(anchor_player["center"], target_point)
+        anchor_distance_ratio = anchor_distance_px / (math.hypot(width, height) or 1.0)
+        if anchor_distance_ratio > 0.10:
+            capture.release()
+            raise ValueError(
+                "Selected point is too far from the nearest detected player; choose a clearer frame"
+            )
         anchor_center = anchor_player["center"]
         anchor_box_height = max(1.0, anchor_player["box"][3] - anchor_player["box"][1])
 
@@ -308,8 +321,16 @@ def analyze_video(data):
         # identity is seeded from the actual selected player instead of trying to
         # re-identify that player backwards from frame zero with only a jersey-colour histogram.
         capture.set(cv2.CAP_PROP_POS_FRAMES, target_frame_index)
-        stride = max(1, round(source_fps / sample_fps))
+        effective_sample_fps = min(requested_sample_fps, source_fps)
+        sample_indices = iter_sample_frame_indices(
+            target_frame_index,
+            total_frames,
+            source_fps,
+            effective_sample_fps,
+        )
+        next_sample_frame = next(sample_indices, None)
         homography = make_homography(calibration)
+        reset_model_trackers(MODEL)
 
         selected_track_id = None
         previous_center = anchor_center
@@ -337,6 +358,7 @@ def analyze_video(data):
         last_touch_time = -10.0
         track_scores = []
         appearance_scores = []
+        tracking_samples = []
         frame_index = target_frame_index
         first_sample = True
 
@@ -344,9 +366,12 @@ def analyze_video(data):
             ok, frame = capture.read()
             if not ok:
                 break
-            if (frame_index - target_frame_index) % stride:
+            if next_sample_frame is None:
+                break
+            if frame_index < next_sample_frame:
                 frame_index += 1
                 continue
+            next_sample_frame = next(sample_indices, None)
 
             sampled_frames += 1
             timestamp = frame_index / source_fps
@@ -363,11 +388,15 @@ def analyze_video(data):
                 previous_ball_center = None
                 close_streak = 0
                 far_streak = 0
+                reset_model_trackers(MODEL)
 
             tracked = MODEL.track(
                 frame,
                 persist=True,
-                tracker="bytetrack.yaml",
+                # BoT-SORT's camera-motion compensation is materially more stable
+                # than ByteTrack on broadcast/panoramic football footage sampled
+                # below the source frame rate.
+                tracker="botsort.yaml",
                 classes=[PERSON_CLASS, BALL_CLASS],
                 conf=confidence,
                 imgsz=image_size,
@@ -396,7 +425,11 @@ def analyze_video(data):
                     candidate_app = appearance_similarity(reference_signature, candidate_signature)
                     diag = math.hypot(width, height) or 1.0
                     motion_ok = previous_center is None or euclidean(candidate["center"], previous_center) / diag <= 0.14
-                    if (reference_signature is None or candidate_app >= 0.20) and motion_ok:
+                    # ByteTrack's persistent ID is the strongest signal inside a
+                    # continuous shot. Small/distant jersey crops are noisy, so a
+                    # weak histogram alone must not reject an otherwise plausible
+                    # persistent track.
+                    if (reference_signature is None or candidate_app >= 0.08) and motion_ok:
                         candidate["signature"] = candidate_signature
                         candidate["appearance_similarity"] = candidate_app
                         player = candidate
@@ -451,14 +484,20 @@ def analyze_video(data):
                 if pitch_point is not None:
                     if previous_pitch_point is not None:
                         step_m = euclidean(pitch_point, previous_pitch_point)
-                        max_step_m = 13.0 / sample_fps
+                        max_step_m = 13.0 / effective_sample_fps
                         if step_m <= max_step_m:
                             distance_meters += step_m
                         else:
                             rejected_jumps += 1
                     previous_pitch_point = pitch_point
 
-                ball = choose_plausible_ball(balls, player, previous_ball_center, frame.shape, sample_fps)
+                ball = choose_plausible_ball(
+                    balls,
+                    player,
+                    previous_ball_center,
+                    frame.shape,
+                    effective_sample_fps,
+                )
                 if balls and ball is None:
                     ball_rejections += 1
                 close = False
@@ -477,7 +516,9 @@ def analyze_video(data):
                 if close_streak >= 2:
                     possession_samples += 1
                     if possession_started is None:
-                        possession_started = max(target_time, timestamp - 1.0 / sample_fps)
+                        possession_started = max(
+                            target_time, timestamp - 1.0 / effective_sample_fps
+                        )
                     if close_streak == 2 and timestamp - last_touch_time >= 0.65:
                         touch_events.append(round(timestamp, 2))
                         last_touch_time = timestamp
@@ -493,13 +534,17 @@ def analyze_video(data):
                     possession_intervals.append([round(possession_started, 2), round(timestamp, 2)])
                     possession_started = None
 
+            tracking_samples.append(player is not None)
             frame_index += 1
 
         capture.release()
         if possession_started is not None:
             possession_intervals.append([round(possession_started, 2), round(duration, 2)])
 
-        coverage = tracked_samples / max(1, sampled_frames) * 100.0
+        tracking_summary = summarize_tracking_samples(
+            tracking_samples, effective_sample_fps
+        )
+        coverage = tracking_summary["coverage_percent"]
         ball_visibility = ball_visible_samples / max(1, sampled_frames) * 100.0
         mean_track_score = sum(track_scores) / max(1, len(track_scores))
         mean_appearance = sum(appearance_scores) / max(1, len(appearance_scores))
@@ -516,22 +561,32 @@ def analyze_video(data):
             (0.78 * (player_quality / 100.0) + 0.22 * min(ball_visibility / 45.0, 1.0)) * 100.0,
             1,
         )
-
-        if player_quality >= 82 and coverage >= 80:
-            quality_label = "good"
-        elif player_quality >= 65 and coverage >= 60:
-            quality_label = "usable_with_review"
-        else:
-            quality_label = "insufficient"
-
-        ball_metrics_reliable = (
-            coverage >= 80
-            and player_quality >= 75
-            and ball_visibility >= 40
-            and sampled_frames >= 30
+        reidentification_rate = (
+            max(0, reidentifications - 1) / max(1, sampled_frames) * 100.0
         )
-        tracked_seconds = tracked_samples / sample_fps
-        possession_seconds = possession_samples / sample_fps
+        identity_rejection_rate = identity_rejections / max(1, sampled_frames) * 100.0
+
+        quality_label, tracking_continuity_reliable = classify_tracking_quality(
+            player_quality=player_quality,
+            coverage_percent=coverage,
+            minimum_window_coverage_percent=tracking_summary[
+                "minimum_window_coverage_percent"
+            ],
+            longest_untracked_gap_seconds=tracking_summary[
+                "longest_untracked_gap_seconds"
+            ],
+            scene_cuts=scene_cuts,
+            reidentification_rate_percent=reidentification_rate,
+            identity_rejection_rate_percent=identity_rejection_rate,
+        )
+        ball_metrics_reliable = ball_metrics_are_reliable(
+            tracking_continuity_reliable=tracking_continuity_reliable,
+            player_quality=player_quality,
+            ball_visibility_percent=ball_visibility,
+            sampled_frames=sampled_frames,
+        )
+        tracked_seconds = tracked_samples / effective_sample_fps
+        possession_seconds = possession_samples / effective_sample_fps
         analyzed_duration = max(0.0, duration - target_time)
 
         result = {
@@ -546,7 +601,8 @@ def analyze_video(data):
                 "width": width,
                 "height": height,
                 "source_fps": round(source_fps, 3),
-                "sample_fps": sample_fps,
+                "requested_sample_fps": requested_sample_fps,
+                "sample_fps": round(effective_sample_fps, 3),
                 "sampled_frames": sampled_frames,
                 "downloaded_mb": round(downloaded_bytes / 1024 / 1024, 2),
             },
@@ -557,6 +613,7 @@ def analyze_video(data):
                     "y": round(target_point[1] / height, 4),
                 },
                 "anchor_detection_distance_pixels": round(anchor_distance_px, 1),
+                "anchor_detection_distance_ratio": round(anchor_distance_ratio, 4),
                 "anchor_seeded_forward_tracking": True,
             },
             "player": {
@@ -580,15 +637,25 @@ def analyze_video(data):
                 "player_tracking_score_percent": player_quality,
                 "label": quality_label,
                 "review_required": quality_label != "good",
+                "tracking_continuity_reliable": tracking_continuity_reliable,
+                "minimum_window_coverage_percent": tracking_summary[
+                    "minimum_window_coverage_percent"
+                ],
+                "longest_untracked_gap_seconds": tracking_summary[
+                    "longest_untracked_gap_seconds"
+                ],
+                "window_coverage_percent": tracking_summary["window_coverage_percent"],
                 "ball_metrics_reliable": ball_metrics_reliable,
                 "ball_visibility_percent": round(ball_visibility, 1),
                 "ball_candidate_rejections": ball_rejections,
                 "mean_identity_appearance_similarity": round(mean_appearance, 3),
+                "reidentification_rate_percent": round(reidentification_rate, 1),
+                "identity_rejection_rate_percent": round(identity_rejection_rate, 1),
                 "scene_cuts_detected": scene_cuts,
                 "rejected_tracking_jumps": rejected_jumps,
             },
             "warnings": [
-                "V2.3 analyzes forward from the player-selection frame; pre-selection footage is not included yet.",
+                "V2.4 analyzes forward from the player-selection frame; pre-selection footage is not included yet.",
                 "Touches and possession remain computer-vision estimates until validated against labelled match footage.",
                 "Broadcast-camera identity can still fail after occlusions or cuts without a dedicated re-identification model.",
             ],
@@ -623,4 +690,5 @@ def handler(job):
         }
 
 
-runpod.serverless.start({"handler": handler})
+if __name__ == "__main__":
+    runpod.serverless.start({"handler": handler})

@@ -2,9 +2,9 @@ from copy import deepcopy
 from typing import Any
 
 
-MIN_TRACKING_COVERAGE = 75.0
-MIN_BALL_VISIBILITY = 18.0
-MIN_OVERALL_QUALITY = 65.0
+MIN_TRACKING_COVERAGE = 80.0
+MIN_PLAYER_TRACKING_QUALITY = 82.0
+MIN_BALL_VISIBILITY = 40.0
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -33,11 +33,24 @@ def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
     tracking = _number(player.get("tracking_coverage_percent"))
     ball_visibility = _number(quality.get("ball_visibility_percent"))
     quality_score = _number(quality.get("score_percent"))
+    player_quality = _number(
+        quality.get("player_tracking_score_percent"), default=quality_score
+    )
     calibration_used = bool(quality.get("pitch_calibration_used"))
 
-    overall_ok = quality_score >= MIN_OVERALL_QUALITY
-    tracking_ok = tracking >= MIN_TRACKING_COVERAGE and overall_ok
-    ball_ok = tracking_ok and ball_visibility >= MIN_BALL_VISIBILITY
+    # Fail closed: public statistics require the engine's explicit continuity
+    # verdict. A high average coverage alone can hide a long identity loss.
+    continuity_ok = quality.get("tracking_continuity_reliable") is True
+    tracking_ok = (
+        tracking >= MIN_TRACKING_COVERAGE
+        and player_quality >= MIN_PLAYER_TRACKING_QUALITY
+        and continuity_ok
+    )
+    ball_ok = (
+        tracking_ok
+        and quality.get("ball_metrics_reliable") is True
+        and ball_visibility >= MIN_BALL_VISIBILITY
+    )
 
     metrics: dict[str, Any] = {
         "tracking_coverage_percent": {
@@ -84,7 +97,16 @@ def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
 
     public_clips = []
     if ball_ok:
-        for clip in deepcopy(engine_result.get("clips") or []):
+        raw_clips = engine_result.get("clips")
+        if raw_clips is None:
+            # The inference worker emits compact touch windows under the player
+            # object. Keep accepting a top-level list for forward compatibility.
+            raw_clips = [
+                {"type": "touch", "start": window[0], "end": window[1]}
+                for window in (player.get("touch_clip_windows_seconds") or [])
+                if isinstance(window, (list, tuple)) and len(window) == 2
+            ]
+        for clip in deepcopy(raw_clips or []):
             if isinstance(clip, dict) and clip.get("type") in {"touch", "possession"}:
                 public_clips.append(clip)
 
@@ -93,8 +115,10 @@ def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
         "engine_version": engine_result.get("engine_version"),
         "quality": {
             "score_percent": round(quality_score, 1),
+            "player_tracking_score_percent": round(player_quality, 1),
             "tracking_coverage_percent": round(tracking, 1),
             "ball_visibility_percent": round(ball_visibility, 1),
+            "tracking_continuity_reliable": continuity_ok,
             "tracking_pass": tracking_ok,
             "ball_metrics_pass": ball_ok,
             "pitch_calibration_used": calibration_used,

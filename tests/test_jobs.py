@@ -29,6 +29,7 @@ class JobStoreTests(unittest.TestCase):
             public = store.public_dict(job)
             self.assertEqual(public["job_id"], "ana_test123")
             self.assertNotIn("provider_job_id", public)
+            self.assertFalse(public["has_result"])
 
     def test_list_recent_is_newest_first(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -72,6 +73,43 @@ class JobStoreTests(unittest.TestCase):
             store = self.make_store(directory)
             with self.assertRaises(KeyError):
                 store.get("missing")
+
+    def test_provider_result_is_persisted_but_hidden_from_public_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(directory)
+            store.put(
+                job_id="ana_result",
+                provider="runpod",
+                provider_job_id="r4",
+                status="submitted",
+                cost_estimate={},
+                request_summary={},
+            )
+            updated = store.update_from_provider(
+                "ana_result",
+                status="completed",
+                engine_result={"status": "completed", "player": {}},
+            )
+            self.assertEqual(updated.engine_result["status"], "completed")
+            public = store.public_dict(updated)
+            self.assertTrue(public["has_result"])
+            self.assertNotIn("engine_result", public)
+
+    def test_provider_error_is_persisted_but_sanitized_from_public_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = self.make_store(directory)
+            job = store.put(
+                job_id="ana_error",
+                provider="runpod",
+                provider_job_id="provider-secret",
+                status="failed",
+                cost_estimate={},
+                request_summary={},
+                provider_error="private worker diagnostic",
+            )
+            public = store.public_dict(job)
+            self.assertNotIn("provider_error", public)
+            self.assertTrue(public["has_error"])
 
 
 if __name__ == "__main__":

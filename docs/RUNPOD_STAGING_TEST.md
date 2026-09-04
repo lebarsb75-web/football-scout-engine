@@ -5,14 +5,14 @@ Purpose: validate `dev-v2` on a real GPU without touching production `main` and 
 ## Non-negotiable safeguards
 
 - Do not merge `dev-v2` into `main` for this benchmark.
-- Keep the current production endpoint on `main` unchanged.
-- Use a cloned staging endpoint tracking `dev-v2`.
+- Keep `main` unchanged.
+- Use the existing endpoint only after confirming it tracks `dev-v2`, or a cloned staging endpoint tracking `dev-v2`.
 - Minimum workers: 0.
 - Maximum workers: 1.
 - Use the same 16 GB GPU class currently selected unless availability forces a manual review.
 - Do not increase workers if RunPod suggests it.
-- First request is only `benchmarks/test-01-technical.json`.
-- Do not run `test-02-gameplay.json` until test 01 is reviewed.
+- Do not rerun the already successful V2.1 smoke test unless endpoint plumbing has changed.
+- First V2.4 request is `benchmarks/test-02-gameplay.json` and must remain below the previously approved ~USD 0.05 ceiling.
 - Approved initial spend ceiling: approximately USD 0.05. Stop if configuration or pricing differs materially from the expected USD 0.58/hour GPU rate.
 
 ## Staging endpoint creation
@@ -27,13 +27,13 @@ From the current endpoint, choose **Clone Endpoint**. In Repository Configuratio
 - workers min: 0
 - workers max: 1
 
-Build the endpoint and wait until the build is `Completed` / endpoint `Ready` before sending any request.
+Build the endpoint and wait until the build is `Completed` / endpoint `Ready` before sending any request. Confirm from the returned result that `engine_version` is exactly `2.4-dev`; stop on any older version.
 
-## First paid request
+## First V2.4 paid request
 
-Use `benchmarks/test-01-technical.json` exactly as committed. It is intentionally tiny: a 6.6-second Creative Commons football video, low inference size, and only 3 sampled frames per second.
+Use `benchmarks/test-02-gameplay.json` exactly as committed. It analyzes 26 seconds of panoramic match footage at an exact 10 fps. Compare it with `benchmarks/local-panoramic-v24.json`.
 
-If the RunPod request UI exposes an execution timeout, set it to 120 seconds for this first smoke test. If the UI does not expose this value, do not change unrelated endpoint settings just to add it.
+Keep the 120-second execution timeout for this test. Do not increase it until the short result passes and longer-run timing justifies a bounded value.
 
 ## Stop conditions
 
@@ -42,6 +42,7 @@ Stop after the first request if any of these occurs:
 - worker fails to start;
 - model/container error;
 - video download error;
+- engine version is not `2.4-dev`;
 - no player found around the selection point;
 - request approaches the timeout;
 - unexpected worker count > 1;
@@ -63,4 +64,4 @@ Capture and save:
 - ball visibility;
 - balance before/after if visible.
 
-Then calculate observed cost with `scripts/cost_from_result.py` and only after that decide whether the 38-second gameplay benchmark is justified.
+Then calculate observed cost with `scripts/cost_from_result.py`. Progress to a 2-minute excerpt only if identity continuity is visually reviewed, the automatic tracking gate passes, and projected spend remains inside the next explicitly communicated ceiling.

@@ -17,7 +17,7 @@ from api.security import (
     validate_video_url_for_submission,
 )
 
-app = FastAPI(title="Football Scout API", version="0.7.0")
+app = FastAPI(title="Football Scout API", version="0.8.0")
 
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
@@ -148,6 +148,13 @@ def analysis_jobs(limit: int = Query(default=20, ge=1, le=100)):
     return {"jobs": [JOBS.public_dict(job) for job in JOBS.list_recent(limit)]}
 
 
+def public_job_payload(job):
+    payload = JOBS.public_dict(job)
+    if job.engine_result is not None:
+        payload["result"] = public_result(job.engine_result)
+    return payload
+
+
 @app.get("/analysis/jobs/{job_id}")
 def analysis_job(job_id: str):
     """Return the last locally known state. This endpoint never spends GPU credit."""
@@ -155,7 +162,75 @@ def analysis_job(job_id: str):
         job = JOBS.get(job_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown analysis job") from exc
-    return JOBS.public_dict(job)
+    return public_job_payload(job)
+
+
+RUNPOD_STATUS_MAP = {
+    "IN_QUEUE": "queued",
+    "IN_PROGRESS": "running",
+    "COMPLETED": "completed",
+    "FAILED": "failed",
+    "TIMED_OUT": "timed_out",
+    "CANCELLED": "cancelled",
+}
+
+
+@app.post("/analysis/jobs/{job_id}/refresh")
+def refresh_analysis_job(job_id: str):
+    """Refresh a submitted job without starting another billable execution."""
+    try:
+        job = JOBS.get(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown analysis job") from exc
+
+    if job.status in {"completed", "failed", "timed_out", "cancelled"}:
+        return public_job_payload(job)
+    if not RUNPOD_ENDPOINT_ID or not RUNPOD_API_KEY:
+        raise HTTPException(status_code=503, detail="RunPod is not configured")
+
+    url = (
+        f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/status/"
+        f"{job.provider_job_id}"
+    )
+    try:
+        response = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="RunPod status request failed") from exc
+    if not response.ok:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "RunPod status request was not successful.",
+                "body": response.text[:1000],
+            },
+        )
+    try:
+        provider_response = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="RunPod returned invalid JSON") from exc
+
+    provider_status = str(provider_response.get("status") or "").upper()
+    status = RUNPOD_STATUS_MAP.get(provider_status, "unknown")
+    output = provider_response.get("output")
+    engine_result = output if status == "completed" and isinstance(output, dict) else None
+    provider_error = None
+    if status in {"failed", "timed_out", "cancelled"}:
+        provider_error = str(provider_response.get("error") or status)[:1000]
+    elif status == "completed" and engine_result is None:
+        status = "failed"
+        provider_error = "RunPod completed without a valid object result"
+
+    updated = JOBS.update_from_provider(
+        job_id,
+        status=status,
+        engine_result=engine_result,
+        provider_error=provider_error,
+    )
+    return public_job_payload(updated)
 
 
 @app.post("/analysis/submit")

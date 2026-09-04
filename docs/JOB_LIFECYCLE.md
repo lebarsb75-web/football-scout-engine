@@ -9,12 +9,13 @@ The browser should never need to know the provider identifier or RunPod credenti
 ## Current states
 
 - `submitted`: provider accepted the job;
-- `running`: reserved for a future status-sync worker;
-- `completed`: reserved for a future result-ingestion worker;
-- `failed`: reserved for a future result-ingestion worker;
-- `cancelled`: reserved for future cancellation support.
+- `running`: provider reports `IN_PROGRESS`;
+- `completed`: provider returned a structured engine result;
+- `failed`: provider or result validation failed;
+- `timed_out`: provider execution timed out;
+- `cancelled`: provider execution was cancelled.
 
-The current API only writes `submitted`. It does **not** poll RunPod automatically, because no paid execution is enabled in this development branch and we do not want hidden provider traffic or accidental compute usage.
+The API writes `submitted`, then refreshes only when an explicit client request calls the refresh endpoint. It does **not** run a background poller and never creates another paid execution while refreshing.
 
 ## Storage
 
@@ -42,14 +43,18 @@ Returns one locally known job. This endpoint does not contact RunPod and cannot 
 
 The provider job ID is removed from public responses. It remains server-side only.
 
+`POST /analysis/jobs/{job_id}/refresh`
+
+Performs one read-only RunPod status request, stores a terminal result when present, and exposes it through the fail-closed quality contract. Provider IDs, raw engine output and provider diagnostics remain server-side.
+
 ## Next production step
 
-After the first explicitly approved short benchmark, add a separate status synchronizer that:
+Before public deployment, add a separate authenticated status synchronizer that:
 
 1. receives a platform job ID;
 2. loads the provider job ID server-side;
 3. performs a read-only provider status request;
-4. validates and stores the engine result;
+4. validates the result against a versioned response schema before storing it;
 5. updates the local state;
 6. exposes only `public_result(...)` to the browser;
 7. records actual runtime/cost for benchmark calibration.

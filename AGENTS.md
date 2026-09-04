@@ -30,31 +30,33 @@ Build the football scouting platform end-to-end with minimal user intervention. 
 - Branch target: `dev-v2`
 
 ## Current engine state
-- Current intended engine: `2.3-dev`
+- Current intended engine: `2.4-dev`
 - Model: `yolo11m.pt`
-- The 2.2 gameplay test completed technically but produced 0% tracking coverage.
-- Root cause identified: anchor selection worked, but the tracking loop tried to recover identity from frame 0 instead of seeding from the selected frame.
-- V2.3 changes start tracking at `target_time_seconds`, hard-lock the first sampled frame to the selected player, and continue identity recovery forward.
-- Commit implementing V2.3: `6bad22cca4eb701f1162cbefd773274fd7cd2a4a`.
+- V2.3 fixed forward seeding from `target_time_seconds` after V2.2 produced 0% coverage.
+- V2.4 adds BoT-SORT camera-motion compensation, exact timestamp-based sampling, direct tracker reset between jobs, anchor-distance rejection, temporal continuity diagnostics, identity-churn gates, and fail-closed API result exposure.
+- Local tests: 45 passing before RunPod deployment.
+- Local 26 s panoramic benchmark: 97.3% coverage, 97.3% minimum-window coverage, 0.7 s longest gap, 5.0% re-identification rate, internal tracking gate passed.
+- The same benchmark has only 9.2% ball visibility, so touches/possession remain hidden; distance remains hidden without calibration.
+- This is not ground-truth validation. Annotated full-match validation is still required.
 
-## Current RunPod build issue
-- RunPod rolled back V2.3 to a previous build after the build did not become active.
-- A fresh commit was pushed to force a rebuild after rollback.
-- Before any new runtime test, verify that the active build actually contains `ENGINE_VERSION = "2.3-dev"` and that the endpoint is Ready.
+## Current RunPod deployment gate
+- Before any new runtime test, verify that the active build contains `ENGINE_VERSION = "2.4-dev"`, the endpoint is Ready, minimum workers is 0 and maximum workers is 1.
+- Verify current balance and GPU price before submission.
+- RunPod credentials are not stored in the repository.
 
 ## Stable gameplay test source
 Use this GitHub-hosted clip rather than Wikimedia (Wikimedia returned HTTP 429):
-`https://raw.githubusercontent.com/AtomScott/SoccerTrack-v2/main/docs/assets/demo-tracking.mp4`
+`https://raw.githubusercontent.com/AtomScott/SoccerTrack-v2/main/docs/assets/demo-gsr_and_bas.mp4`
 
 Representative payload:
 ```json
 {
   "input": {
     "video_url": "https://raw.githubusercontent.com/AtomScott/SoccerTrack-v2/main/docs/assets/demo-tracking.mp4",
-    "target_time_seconds": 3.0,
-    "target": {"x": 0.5, "y": 0.55},
-    "sample_fps": 5,
-    "confidence": 0.22,
+    "target_time_seconds": 4.0,
+    "target": {"x": 0.5949, "y": 0.3501},
+    "sample_fps": 10,
+    "confidence": 0.15,
     "image_size": 960,
     "max_video_mb": 100
   },
@@ -82,6 +84,19 @@ Representative payload:
 - `ball_metrics_reliable`: false
 - Anchor detection distance: ~85.6 px
 - This test proved the selection step found a person, but tracking was not seeded correctly.
+
+### Local panoramic test on V2.4
+- Analysis duration: 26 s
+- Resolution: 4096 x 1080
+- 260 sampled frames at an exact 10 fps
+- Local CPU processing: 53.58 s
+- Tracking coverage: 97.3%
+- Player tracking quality: 96.5%
+- Minimum-window coverage: 97.3%
+- Longest untracked gap: 0.7 s
+- Re-identification rate: 5.0%
+- Ball visibility: 9.2%, ball metrics hidden
+- Internal continuity gate passed; ground-truth identity accuracy not yet measured
 
 ## Quality policy
 Do not present unreliable stats as facts.

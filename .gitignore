@@ -21,6 +21,7 @@ reports/
 *.mov
 *.mkv
 *.avi
+*.pt
 
 # Local tooling / OS
 .DS_Store

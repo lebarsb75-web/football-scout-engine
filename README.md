@@ -11,13 +11,14 @@ Prototype de plateforme d'analyse vidéo individuelle pour joueurs de football.
 ### Moteur vidéo (`handler.py`)
 - sélection du joueur à un instant choisi dans la vidéo ;
 - détection personnes + ballon avec YOLO ;
-- tracking temporel ;
+- tracking temporel BoT-SORT avec compensation du mouvement caméra ;
 - ré-identification simple par apparence ;
 - détection des changements de plan ;
 - lissage des déplacements et rejet de sauts incohérents ;
 - estimation touches / possession ;
 - timestamps et fenêtres de clips autour des actions ;
 - score de qualité et seuils de fiabilité ;
+- couverture par fenêtre, durée maximale de perte et taux de ré-identification ;
 - distance métrique uniquement avec calibration compatible.
 
 ### Prototype web (`web/`)
@@ -34,6 +35,7 @@ Prototype de plateforme d'analyse vidéo individuelle pour joueurs de football.
 - estimation de coût basée sur un benchmark réel ;
 - refus automatique d'une analyse tant qu'aucun benchmark n'a été mesuré ;
 - refus si l'estimation dépasse le plafond autorisé ;
+- registre local des jobs, rafraîchissement explicite et résultat public filtré ;
 - `ENABLE_PAID_GPU=false` par défaut.
 
 ### Post-traitement (`scripts/`)
@@ -91,4 +93,6 @@ Au moins quatre correspondances sont nécessaires. Sur une vidéo Veo / caméra 
 
 ## Statut
 
-Le produit est encore en développement. Les chiffres de touches, possession, distance et suivi doivent être validés contre des séquences annotées manuellement avant utilisation commerciale.
+Le moteur `2.4-dev` passe 97,3 % de couverture sur le benchmark panoramique local de 26 s, avec une pire fenêtre à 97,3 % et une absence maximale de 0,7 s. Le gate ballon échoue correctement (9,2 % de visibilité) et masque touches/possession ; la distance reste masquée sans calibration.
+
+Ce benchmark vérifie la cohérence interne, pas l'identité exacte image par image. Les chiffres de tracking, touches, possession et distance doivent encore être mesurés contre des séquences annotées avant utilisation commerciale ou test d'un match entier.

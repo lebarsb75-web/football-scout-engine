@@ -1,11 +1,11 @@
 {
   "input": {
-    "video_url": "https://raw.githubusercontent.com/AtomScott/SoccerTrack-v2/main/docs/assets/demo-tracking.mp4",
-    "target_time_seconds": 2.0,
-    "target": {"x": 0.5, "y": 0.55},
-    "sample_fps": 4,
-    "confidence": 0.22,
+    "video_url": "https://raw.githubusercontent.com/AtomScott/SoccerTrack-v2/main/docs/assets/demo-gsr_and_bas.mp4",
+    "target_time_seconds": 4.0,
+    "target": {"x": 0.5949, "y": 0.3501},
+    "sample_fps": 10,
+    "confidence": 0.15,
     "image_size": 960,
-    "max_video_mb": 20
+    "max_video_mb": 100
   }
 }

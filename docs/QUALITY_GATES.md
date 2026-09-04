@@ -21,7 +21,15 @@ Le joueur sélectionné doit être détecté sur l'image de référence et la d�
 
 ## Gate 2 — Tracking joueur
 
-Objectif prototype : couverture >= 80 % sur des séquences où le joueur est visible.
+Une moyenne élevée peut masquer une longue perte d'identité. L'API publique exige donc simultanément :
+
+- couverture globale >= 80 % ;
+- score de tracking joueur >= 82 % ;
+- couverture de la pire fenêtre de 30 s >= 65 % ;
+- plus longue absence <= 5 s ;
+- aucun changement de plan ;
+- taux de ré-identification <= 5 % ;
+- taux de rejet d'identité <= 5 %.
 
 Mesures :
 - `tracking_coverage_percent`
@@ -29,13 +37,18 @@ Mesures :
 - `identity_rejections`
 - `mean_identity_appearance_similarity`
 - `rejected_tracking_jumps`
+- `minimum_window_coverage_percent`
+- `longest_untracked_gap_seconds`
+- `reidentification_rate_percent`
+- `identity_rejection_rate_percent`
 
 ## Gate 3 — Ballon
 
 Les statistiques issues du ballon ne sont considérées comme exploitables que si :
-- tracking joueur >= 75 % ;
-- visibilité ballon >= 35 % des images échantillonnées ;
-- score qualité global >= 70 %.
+- le gate strict de continuité joueur est validé ;
+- score de tracking joueur >= 82 % ;
+- visibilité ballon >= 40 % des images échantillonnées ;
+- au moins 30 images ont été analysées.
 
 En dessous, touches et possession restent des estimations techniques et ne doivent pas être présentées au client comme des statistiques vérifiées.
 
@@ -57,6 +70,8 @@ Avant vente : constituer un jeu d'au moins 10 séquences annotées manuellement 
 - distance de référence lorsque mesurable.
 
 Comparer ensuite prédiction et annotation.
+
+Le label interne `good` n'est pas une mesure de précision vérité terrain : il indique seulement que les diagnostics automatiques de continuité ont passé leurs seuils. Il ne suffit pas pour annoncer des statistiques commerciales fiables.
 
 ## Seuil de lancement d'un match de 90 minutes
 
