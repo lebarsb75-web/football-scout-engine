@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Football Scout — Analyse joueur</title>
+  <meta name="description" content="Prototype de plateforme d'analyse vidéo pour joueurs de football." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">FS</div>
+        <div>
+          <strong>Football Scout</strong>
+          <span>Player Intelligence</span>
+        </div>
+      </div>
+      <nav>
+        <button class="nav-item active">Nouvelle analyse</button>
+        <button class="nav-item" disabled>Mes matchs</button>
+        <button class="nav-item" disabled>Mes clips</button>
+        <button class="nav-item" disabled>Mon profil</button>
+      </nav>
+      <div class="sidebar-note">
+        <span class="dot"></span>
+        Prototype local<br />Aucun GPU lancé
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">ANALYSE INDIVIDUELLE</p>
+          <h1>Transforme ton match en données utiles.</h1>
+          <p class="lead">Charge une vidéo, sélectionne ton joueur et prépare une analyse sans lancer de GPU.</p>
+        </div>
+        <div class="status-pill">Mode préparation · 0 € consommé</div>
+      </header>
+
+      <section class="step-grid">
+        <article class="step-card active" id="step-upload">
+          <div class="step-number">1</div>
+          <div>
+            <h2>Ajouter le match</h2>
+            <p>MP4, MOV ou vidéo compatible navigateur.</p>
+          </div>
+        </article>
+        <article class="step-card" id="step-player">
+          <div class="step-number">2</div>
+          <div>
+            <h2>Sélectionner le joueur</h2>
+            <p>Mets sur pause puis clique sur le joueur.</p>
+          </div>
+        </article>
+        <article class="step-card" id="step-ready">
+          <div class="step-number">3</div>
+          <div>
+            <h2>Préparer l'analyse</h2>
+            <p>Vérification des paramètres avant coût GPU.</p>
+          </div>
+        </article>
+      </section>
+
+      <section class="workspace">
+        <div class="panel upload-panel" id="upload-panel">
+          <label class="dropzone" id="dropzone" for="video-input">
+            <input id="video-input" type="file" accept="video/*" hidden />
+            <div class="upload-icon">↑</div>
+            <h3>Dépose ton match ici</h3>
+            <p>ou clique pour choisir une vidéo</p>
+            <span>Aucune donnée n'est envoyée tant que le backend n'est pas connecté.</span>
+          </label>
+        </div>
+
+        <div class="panel video-panel hidden" id="video-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">ÉTAPE 2</p>
+              <h2>Choisis une image claire et clique sur toi</h2>
+            </div>
+            <div class="file-meta" id="file-meta"></div>
+          </div>
+
+          <div class="video-stage" id="video-stage">
+            <video id="video" controls playsinline></video>
+            <div id="target-marker" class="target-marker hidden" aria-hidden="true"></div>
+          </div>
+
+          <div class="selection-summary">
+            <div>
+              <span>Moment sélectionné</span>
+              <strong id="selected-time">—</strong>
+            </div>
+            <div>
+              <span>Position joueur</span>
+              <strong id="selected-position">—</strong>
+            </div>
+            <button class="secondary" id="clear-selection" disabled>Recommencer la sélection</button>
+          </div>
+        </div>
+
+        <div class="panel prepare-panel hidden" id="prepare-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">ÉTAPE 3</p>
+              <h2>Requête prête, mais pas envoyée</h2>
+              <p class="panel-copy">Le prochain bouton commercial sera protégé par une validation du coût avant toute exécution GPU.</p>
+            </div>
+            <div class="safe-badge">Budget protégé</div>
+          </div>
+
+          <div class="prepare-grid">
+            <div class="summary-card">
+              <span>Vidéo</span>
+              <strong id="summary-file">—</strong>
+            </div>
+            <div class="summary-card">
+              <span>Durée</span>
+              <strong id="summary-duration">—</strong>
+            </div>
+            <div class="summary-card">
+              <span>Joueur sélectionné à</span>
+              <strong id="summary-time">—</strong>
+            </div>
+            <div class="summary-card">
+              <span>GPU</span>
+              <strong>Non lancé</strong>
+            </div>
+          </div>
+
+          <details class="payload-box">
+            <summary>Voir les paramètres préparés</summary>
+            <pre id="payload-preview"></pre>
+          </details>
+
+          <div class="cost-warning">
+            <div>
+              <strong>La phase payante est volontairement désactivée.</strong>
+              <p>Quand le moteur sera suffisamment fiable, le site affichera une estimation du coût et demandera une confirmation avant d'envoyer la vidéo au GPU.</p>
+            </div>
+            <button class="primary" disabled>Analyse GPU verrouillée</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="results-preview">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">VISION PRODUIT</p>
+            <h2>Ce que le joueur recevra après validation du moteur</h2>
+          </div>
+          <span class="preview-tag">Aperçu</span>
+        </div>
+        <div class="metric-grid">
+          <div class="metric"><span>Distance</span><strong>— km</strong><small>avec calibration fiable</small></div>
+          <div class="metric"><span>Touches</span><strong>—</strong><small>avec niveau de confiance</small></div>
+          <div class="metric"><span>Possession</span><strong>— min</strong><small>séquences détectées</small></div>
+          <div class="metric"><span>Suivi joueur</span><strong>— %</strong><small>score qualité visible</small></div>
+        </div>
+        <div class="timeline-card">
+          <div class="timeline-head">
+            <strong>Chronologie des actions</strong>
+            <span>Clips générés autour des événements</span>
+          </div>
+          <div class="timeline">
+            <div class="timeline-line"></div>
+            <span style="left:12%"></span><span style="left:26%"></span><span style="left:43%"></span><span style="left:67%"></span><span style="left:84%"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

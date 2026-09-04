@@ -1,0 +1,2 @@
+RunPod rebuild trigger for dev-v2 after endpoint rollback.
+No runtime job is launched by this file.
