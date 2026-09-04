@@ -1,13 +1,15 @@
 import os
 import re
+import uuid
 from typing import Any, Optional
 
 import requests
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from api.costs import authorization_allows_submission, estimate_cost
 from api.idempotency import IdempotencyStore
+from api.jobs import JobStore
 from api.results import public_result
 from api.security import (
     approval_secret_configured,
@@ -15,7 +17,7 @@ from api.security import (
     validate_video_url_for_submission,
 )
 
-app = FastAPI(title="Football Scout API", version="0.5.0")
+app = FastAPI(title="Football Scout API", version="0.6.0")
 
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
@@ -26,6 +28,7 @@ BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE = os.getenv(
 )
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{12,128}$")
 SUBMISSION_CACHE = IdempotencyStore()
+JOBS = JobStore()
 
 
 class Target(BaseModel):
@@ -94,6 +97,7 @@ def health():
         "cost_approval_guard_configured": approval_secret_configured(),
         "video_host_allowlist_configured": bool(os.getenv("VIDEO_HOST_ALLOWLIST", "").strip()),
         "idempotency_guard": "process_local",
+        "job_registry": "sqlite_local",
     }
 
 
@@ -106,6 +110,22 @@ def analysis_estimate(request: AnalysisRequest):
 def analysis_result_preview(request: EngineResultPreviewRequest):
     """Free/local transformation of raw engine output into user-safe metrics."""
     return public_result(request.engine_result)
+
+
+@app.get("/analysis/jobs")
+def analysis_jobs(limit: int = Query(default=20, ge=1, le=100)):
+    """Return locally remembered jobs without contacting RunPod."""
+    return {"jobs": [JOBS.public_dict(job) for job in JOBS.list_recent(limit)]}
+
+
+@app.get("/analysis/jobs/{job_id}")
+def analysis_job(job_id: str):
+    """Return the last locally known state. This endpoint never spends GPU credit."""
+    try:
+        job = JOBS.get(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown analysis job") from exc
+    return JOBS.public_dict(job)
 
 
 @app.post("/analysis/submit")
@@ -186,11 +206,34 @@ def analysis_submit(
             detail={"message": "RunPod rejected the job", "body": response.text[:1000]},
         )
 
+    provider_response = response.json()
+    provider_job_id = str(provider_response.get("id") or provider_response.get("jobId") or "")
+    if not provider_job_id:
+        raise HTTPException(
+            status_code=502,
+            detail="RunPod accepted the request but returned no job identifier.",
+        )
+
+    public_job_id = f"ana_{uuid.uuid4().hex}"
+    job = JOBS.put(
+        job_id=public_job_id,
+        provider="runpod",
+        provider_job_id=provider_job_id,
+        status="submitted",
+        cost_estimate=estimate,
+        request_summary={
+            "video_duration_seconds": request.video_duration_seconds,
+            "target_time_seconds": request.target_time_seconds,
+            "sample_fps": request.sample_fps,
+            "image_size": request.image_size,
+        },
+    )
+
     result = {
         "submitted": True,
         "idempotent_replay": False,
+        "job": JOBS.public_dict(job),
         "cost_estimate": estimate,
-        "runpod": response.json(),
     }
     SUBMISSION_CACHE.put(idempotency_key, request_payload, result)
     return result
