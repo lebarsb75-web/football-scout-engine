@@ -8,7 +8,7 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from api.costs import authorization_allows_submission, estimate_cost
-from api.idempotency import IdempotencyStore
+from api.idempotency import IdempotencyPendingError, IdempotencyStore
 from api.jobs import JobStore
 from api.results import public_result
 from api.security import (
@@ -17,7 +17,7 @@ from api.security import (
     validate_video_url_for_submission,
 )
 
-app = FastAPI(title="Football Scout API", version="0.6.0")
+app = FastAPI(title="Football Scout API", version="0.7.0")
 
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
@@ -87,6 +87,36 @@ def validate_idempotency_key(value: str | None) -> str:
     return value
 
 
+def get_cached_submission_or_none(key: str, payload: dict[str, Any]):
+    try:
+        return SUBMISSION_CACHE.get(key, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IdempotencyPendingError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This analysis submission is already in progress. Do not retry with a "
+                "new key because that could create a duplicate paid job."
+            ),
+        ) from exc
+
+
+def reserve_submission_or_replay(key: str, payload: dict[str, Any]):
+    try:
+        return SUBMISSION_CACHE.reserve(key, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IdempotencyPendingError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This analysis submission is already in progress. Keep the same "
+                "idempotency key and wait for its recorded job instead of resubmitting."
+            ),
+        ) from exc
+
+
 @app.get("/health")
 def health():
     return {
@@ -96,7 +126,7 @@ def health():
         "benchmark_available": benchmark_seconds_per_video_minute() is not None,
         "cost_approval_guard_configured": approval_secret_configured(),
         "video_host_allowlist_configured": bool(os.getenv("VIDEO_HOST_ALLOWLIST", "").strip()),
-        "idempotency_guard": "process_local",
+        "idempotency_guard": "sqlite_durable_single_host",
         "job_registry": "sqlite_local",
     }
 
@@ -139,10 +169,7 @@ def analysis_submit(
     idempotency_key = validate_idempotency_key(x_idempotency_key)
     request_payload = request.model_dump(mode="json")
 
-    try:
-        cached = SUBMISSION_CACHE.get(idempotency_key, request_payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    cached = get_cached_submission_or_none(idempotency_key, request_payload)
     if cached is not None:
         return {**cached, "idempotent_replay": True}
 
@@ -183,6 +210,13 @@ def analysis_submit(
             },
         )
 
+    # Critical safety boundary: claim the key atomically before the first network
+    # request that can create a billable job. A simultaneous retry will now fail
+    # closed as pending rather than launching a second GPU job.
+    replay = reserve_submission_or_replay(idempotency_key, request_payload)
+    if replay is not None:
+        return {**replay, "idempotent_replay": True}
+
     url = f"https://api.runpod.ai/v2/{RUNPOD_ENDPOINT_ID}/run"
     payload = {
         "input": {
@@ -201,9 +235,18 @@ def analysis_submit(
         timeout=30,
     )
     if not response.ok:
+        # Keep the reservation pending on ambiguity. A human/operator can inspect
+        # the provider before deciding whether the key is safe to release; automatic
+        # release here could duplicate a job after a network/proxy failure.
         raise HTTPException(
             status_code=502,
-            detail={"message": "RunPod rejected the job", "body": response.text[:1000]},
+            detail={
+                "message": (
+                    "RunPod did not return a successful submission response. The "
+                    "idempotency key remains reserved to prevent accidental double spend."
+                ),
+                "body": response.text[:1000],
+            },
         )
 
     provider_response = response.json()
@@ -211,7 +254,10 @@ def analysis_submit(
     if not provider_job_id:
         raise HTTPException(
             status_code=502,
-            detail="RunPod accepted the request but returned no job identifier.",
+            detail=(
+                "RunPod accepted the request but returned no job identifier. The "
+                "idempotency key remains reserved for safety."
+            ),
         )
 
     public_job_id = f"ana_{uuid.uuid4().hex}"
