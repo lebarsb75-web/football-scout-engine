@@ -7,5 +7,9 @@
     "confidence": 0.22,
     "image_size": 640,
     "max_video_mb": 100
+  },
+  "policy": {
+    "executionTimeout": 120000,
+    "ttl": 300000
   }
 }
