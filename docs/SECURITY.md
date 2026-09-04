@@ -11,9 +11,24 @@ Un envoi RunPod payant exige désormais simultanément :
 3. un benchmark court réellement mesuré pour pouvoir estimer le coût ;
 4. un plafond `approved_max_cost_usd` supérieur ou égal à l'estimation ;
 5. un `COST_APPROVAL_SECRET` configuré côté serveur et fourni par l'appelant backend de confiance ;
-6. un domaine vidéo autorisé dans `VIDEO_HOST_ALLOWLIST`.
+6. un domaine vidéo autorisé dans `VIDEO_HOST_ALLOWLIST` ;
+7. une clé d'idempotence valide réservée atomiquement avant l'appel au fournisseur payant.
 
 La configuration de développement conserve `ENABLE_PAID_GPU=false`. Modifier ce seul drapeau ne suffit volontairement pas à dépenser du crédit.
+
+## Idempotence et double dépense
+
+`api/idempotency.py` utilise maintenant SQLite pour conserver les clés de soumission et leur état `pending` / `completed`.
+
+Le point critique est la réservation **avant** le premier appel RunPod susceptible de créer un job facturable :
+
+`validation -> estimation -> autorisation -> réserve idempotence -> appel RunPod -> enregistre job -> complète idempotence`
+
+Deux requêtes concurrentes portant la même clé et le même payload ne peuvent donc pas toutes les deux franchir la réservation. La seconde reçoit un conflit tant que la première est `pending`. Une clé réutilisée avec un payload différent est refusée.
+
+En cas de réponse réseau ambiguë ou de crash juste après l'acceptation côté fournisseur, la réservation reste volontairement `pending`. C'est un choix de sécurité : il vaut mieux demander une vérification opérateur que supprimer automatiquement la réservation et risquer de payer deux fois.
+
+Pour le prototype mono-hôte, SQLite est suffisant. Avant plusieurs instances backend, déplacer la réservation atomique et le registre des jobs vers un stockage transactionnel partagé (par exemple Postgres). Les fichiers SQLite doivent être montés sur un volume persistant si le conteneur API est redémarré.
 
 ## Secrets
 
@@ -45,9 +60,8 @@ Le backend refuse déjà pour les soumissions payantes :
 - plafond de coût par requête ;
 - secret d'approbation indépendant ;
 - domaine vidéo explicitement autorisé ;
+- réservation idempotente persistante avant le lancement ;
 - nombre de workers RunPod contrôlé pendant la phase de test.
-
-Avant ouverture publique, ajouter une **idempotence durable** : un double-clic ou retry réseau ne doit jamais pouvoir créer deux jobs payants pour la même analyse.
 
 ## Upload
 
@@ -79,7 +93,7 @@ Avant ouverture publique :
 - pas de stack trace exposée au client ;
 - timeouts réseau ;
 - taille de réponse limitée ;
-- idempotence durable avant paiement réel.
+- migration vers idempotence partagée avant scaling horizontal.
 
 ## Données football
 
