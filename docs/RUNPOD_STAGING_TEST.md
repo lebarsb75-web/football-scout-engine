@@ -35,6 +35,25 @@ Use `benchmarks/test-02-gameplay.json` exactly as committed. It analyzes 26 seco
 
 Keep the 120-second execution timeout for this test. Do not increase it until the short result passes and longer-run timing justifies a bounded value.
 
+Run the automated preflight without spending credit:
+
+```bash
+RUNPOD_API_KEY=... python -m scripts.runpod_smoke_test
+```
+
+Only after that command reports `passed: true`, submit the single approved job:
+
+```bash
+RUNPOD_API_KEY=... python -m scripts.runpod_smoke_test --execute
+```
+
+The script reads the live endpoint, worker list, queue health, Serverless GPU
+catalog price and account balance before submission. It refuses any payload
+other than Test 02, any worker maximum other than one, any price above
+USD 0.58/hour, or a conservative bound above USD 0.05. It submits no automatic
+retry. The raw provider response is stored under the ignored `outputs/runpod/`
+directory for private review.
+
 ## Stop conditions
 
 Stop after the first request if any of these occurs:

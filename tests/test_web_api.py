@@ -34,6 +34,15 @@ class WebApiIntegrationTests(unittest.TestCase):
         )
         self.assertNotIn("access-control-allow-origin", response.headers)
 
+    def test_estimate_only_requires_video_duration(self):
+        response = self.client.post(
+            "/analysis/estimate",
+            json={"video_duration_seconds": 26},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["ready"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -73,6 +73,10 @@ class SubmitRequest(AnalysisRequest):
     approved_max_cost_usd: float = Field(gt=0, le=25)
 
 
+class EstimateRequest(BaseModel):
+    video_duration_seconds: float = Field(gt=0, le=6 * 60 * 60)
+
+
 class EngineResultPreviewRequest(BaseModel):
     engine_result: dict[str, Any]
 
@@ -149,7 +153,7 @@ def health():
 
 
 @app.post("/analysis/estimate")
-def analysis_estimate(request: AnalysisRequest):
+def analysis_estimate(request: EstimateRequest):
     return build_estimate(request.video_duration_seconds)
 
 
