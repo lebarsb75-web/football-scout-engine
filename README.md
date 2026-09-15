@@ -2,6 +2,18 @@
 
 Prototype de plateforme d'analyse vidéo individuelle pour joueurs de football.
 
+## Environnement Python
+
+Le dépôt cible Python 3.11, comme la CI et l'image de production. Avec `pyenv`, la
+version est sélectionnée automatiquement par `.python-version`. Cette contrainte
+évite notamment de compiler une ancienne version de `pydantic-core` avec une
+version de Python qu'elle ne prend pas encore en charge.
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m unittest discover -s tests -p 'test_*.py'
+```
+
 ## Branche de développement
 
 `dev-v2` contient la nouvelle version en construction. Elle reste séparée de `main`, qui est reliée à l'endpoint RunPod actuel. Le but est de pouvoir améliorer le produit sans déclencher volontairement d'analyse GPU payante.

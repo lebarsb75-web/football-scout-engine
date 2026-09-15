@@ -359,6 +359,7 @@ def analyze_video(data):
         track_scores = []
         appearance_scores = []
         tracking_samples = []
+        validation_trace = []
         frame_index = target_frame_index
         first_sample = True
 
@@ -535,6 +536,21 @@ def analyze_video(data):
                     possession_started = None
 
             tracking_samples.append(player is not None)
+            trace_sample = {
+                "timestamp_seconds": round(timestamp, 3),
+                "tracked": player is not None,
+            }
+            if player is not None:
+                trace_sample.update(
+                    {
+                        "center": {
+                            "x": round(player["center"][0] / width, 6),
+                            "y": round(player["center"][1] / height, 6),
+                        },
+                        "track_id": player["id"],
+                    }
+                )
+            validation_trace.append(trace_sample)
             frame_index += 1
 
         capture.release()
@@ -654,6 +670,10 @@ def analyze_video(data):
                 "scene_cuts_detected": scene_cuts,
                 "rejected_tracking_jumps": rejected_jumps,
             },
+            # Kept in the private worker result. It enables comparison with
+            # independently annotated frames; the public API never exposes raw
+            # engine results (including this trace).
+            "validation": {"tracking_trace": validation_trace},
             "warnings": [
                 "V2.4 analyzes forward from the player-selection frame; pre-selection footage is not included yet.",
                 "Touches and possession remain computer-vision estimates until validated against labelled match footage.",

@@ -23,6 +23,7 @@ jobs:
           python -m py_compile handler.py
           python -m py_compile engine_quality.py
           python -m py_compile engine_tracking.py
+          python -m py_compile ground_truth_validation.py
           python -m py_compile api/app.py
           python -m py_compile api/costs.py
           python -m py_compile api/security.py
@@ -32,6 +33,7 @@ jobs:
           python -m py_compile scripts/build_clips.py
           python -m py_compile scripts/render_report.py
           python -m py_compile scripts/cost_from_result.py
+          python -m py_compile scripts/evaluate_ground_truth.py
       - name: Unit tests
         run: python -m unittest discover -s tests -p 'test_*.py'
       - name: JavaScript syntax
@@ -67,6 +69,7 @@ jobs:
           assert 'ENABLE_PAID_GPU=false' in env
           assert 'COST_APPROVAL_SECRET=' in env
           assert 'VIDEO_HOST_ALLOWLIST=' in env
+          assert 'WEB_ALLOWED_ORIGINS=' in env
           assert 'approval_secret_matches' in app
           assert 'validate_video_url_for_submission' in app
           assert 'X-Idempotency-Key' in app
@@ -90,4 +93,3 @@ jobs:
           test -f web/index.html
           test -f web/styles.css
           test -f web/app.js
-          test -f web/result-demo.html
