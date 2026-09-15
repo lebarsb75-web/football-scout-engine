@@ -71,6 +71,21 @@ Avant vente : constituer un jeu d'au moins 10 séquences annotées manuellement 
 
 Comparer ensuite prédiction et annotation.
 
+Le résultat privé du worker contient désormais `validation.tracking_trace` (temps,
+présence, centre normalisé et ID de track). Préparer les annotations selon
+`contracts/tracking-annotations.example.json`, puis exécuter :
+
+```bash
+python scripts/evaluate_ground_truth.py result.json annotations.json --output validation.json
+```
+
+Le gate vérité terrain exige au minimum 30 images évaluées, dont 20 où la cible
+est visible, au moins 95 % d'identité correcte (centre prédit à moins de 3,5 % de
+la diagonale normalisée), au plus 5 % de faux positifs lorsque la cible est absente,
+et aucune annotation sans échantillon temporel correspondant. Ce gate minimal doit
+être passé sur chacune des 10 séquences ; il ne remplace pas la revue des touches,
+de la possession et, lorsque mesurable, de la distance.
+
 Le label interne `good` n'est pas une mesure de précision vérité terrain : il indique seulement que les diagnostics automatiques de continuité ont passé leurs seuils. Il ne suffit pas pour annoncer des statistiques commerciales fiables.
 
 ## Seuil de lancement d'un match de 90 minutes

@@ -5,6 +5,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,7 @@ class JobStore:
         return connection
 
     def _initialise(self):
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS analysis_jobs (
@@ -84,7 +85,7 @@ class JobStore:
         provider_error: str | None = None,
     ) -> AnalysisJob:
         now = time.time()
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 INSERT INTO analysis_jobs (
@@ -120,7 +121,7 @@ class JobStore:
         return self.get(job_id)
 
     def get(self, job_id: str) -> AnalysisJob:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT * FROM analysis_jobs WHERE job_id = ?", (job_id,)
             ).fetchone()
@@ -145,7 +146,7 @@ class JobStore:
 
     def list_recent(self, limit: int = 20) -> list[AnalysisJob]:
         safe_limit = max(1, min(int(limit), 100))
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 "SELECT job_id FROM analysis_jobs ORDER BY created_at DESC LIMIT ?",
                 (safe_limit,),
@@ -153,7 +154,7 @@ class JobStore:
         return [self.get(row["job_id"]) for row in rows]
 
     def update_status(self, job_id: str, status: str) -> AnalysisJob:
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection, connection:
             cursor = connection.execute(
                 "UPDATE analysis_jobs SET status = ?, updated_at = ? WHERE job_id = ?",
                 (status, time.time(), job_id),
@@ -175,7 +176,7 @@ class JobStore:
             if engine_result is not None
             else None
         )
-        with self._lock, self._connect() as connection:
+        with self._lock, closing(self._connect()) as connection, connection:
             cursor = connection.execute(
                 """
                 UPDATE analysis_jobs

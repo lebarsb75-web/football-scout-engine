@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from api.costs import authorization_allows_submission, estimate_cost
@@ -18,6 +19,22 @@ from api.security import (
 )
 
 app = FastAPI(title="Football Scout API", version="0.8.0")
+
+WEB_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "WEB_ALLOWED_ORIGINS",
+        "http://localhost:4173,http://127.0.0.1:4173",
+    ).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=WEB_ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Cost-Approval-Secret", "X-Idempotency-Key"],
+)
 
 RUNPOD_ENDPOINT_ID = os.getenv("RUNPOD_ENDPOINT_ID", "")
 RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY", "")
