@@ -38,6 +38,9 @@ python -m unittest discover -s tests -p 'test_*.py'
 - lecture du match dans le navigateur ;
 - pause à l'instant souhaité ;
 - clic directement sur le joueur ;
+- fiche joueur et contexte du match conservés dans le rapport ;
+- historique des analyses avec reprise d'un job existant ;
+- export du rapport public en JSON et CSV ;
 - génération automatique des coordonnées normalisées et du timestamp ;
 - aperçu de la requête prête à être envoyée ;
 - exécution GPU volontairement verrouillée dans le prototype.

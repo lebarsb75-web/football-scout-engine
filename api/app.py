@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+from datetime import date
 from typing import Any, Optional
 
 import requests
@@ -69,8 +70,23 @@ class AnalysisRequest(BaseModel):
         return self
 
 
+class PlayerProfile(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    position: str = Field(min_length=1, max_length=40)
+    team: str | None = Field(default=None, max_length=80)
+    shirt_number: int | None = Field(default=None, ge=1, le=99)
+
+
+class MatchContext(BaseModel):
+    opponent: str | None = Field(default=None, max_length=80)
+    match_date: date | None = None
+    source_filename: str | None = Field(default=None, max_length=255)
+
+
 class SubmitRequest(AnalysisRequest):
     approved_max_cost_usd: float = Field(gt=0, le=25)
+    player_profile: PlayerProfile | None = None
+    match_context: MatchContext | None = None
 
 
 class EstimateRequest(BaseModel):
@@ -368,6 +384,16 @@ def analysis_submit(
             "target_time_seconds": request.target_time_seconds,
             "sample_fps": request.sample_fps,
             "image_size": request.image_size,
+            "player_profile": (
+                request.player_profile.model_dump(mode="json")
+                if request.player_profile is not None
+                else None
+            ),
+            "match_context": (
+                request.match_context.model_dump(mode="json")
+                if request.match_context is not None
+                else None
+            ),
         },
     )
 

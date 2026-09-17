@@ -14,7 +14,10 @@ Le prototype permet de :
 2. la lire localement dans le navigateur ;
 3. mettre en pause à un moment où le joueur est clairement visible ;
 4. cliquer directement sur le joueur ;
-5. récupérer automatiquement le timestamp et les coordonnées normalisées nécessaires au moteur.
+5. compléter l'identité du joueur et le contexte du match ;
+6. récupérer automatiquement le timestamp et les coordonnées normalisées nécessaires au moteur ;
+7. retrouver un job existant dans l'historique sans le soumettre une seconde fois ;
+8. exporter un rapport validé en JSON ou en CSV.
 
 Sans URL signée et backend configuré, aucun bouton ne peut soumettre le fichier à
 RunPod. Une fois connecté, le navigateur appelle successivement l'estimation,
@@ -35,6 +38,10 @@ Le parcours connecté utilise :
 Les champs `available: false` sont toujours rendus comme « Masquée », sans
 reprendre la valeur brute. Un résultat `review_required` affiche un état non
 exploitable et aucune statistique joueur.
+
+L'historique consomme le registre local de l'API. L'ouverture d'une analyse déjà
+envoyée utilise son identifiant public, puis rafraîchit ce job précis : elle ne
+fait aucun appel à `/analysis/submit` et ne peut donc pas doubler une dépense GPU.
 
 ## Preview publique gratuite
 
