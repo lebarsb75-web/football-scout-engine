@@ -1,6 +1,11 @@
 name: deploy-private-backend
 
 on:
+  push:
+    branches: [dev-v2]
+    paths:
+      - 'worker/**'
+      - '.github/workflows/deploy-worker.yml'
   workflow_dispatch:
 
 permissions:
