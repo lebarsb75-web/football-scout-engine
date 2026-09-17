@@ -13,6 +13,8 @@ COPY requirements.txt .
 RUN python3 -m pip install --upgrade pip && python3 -m pip install -r requirements.txt
 
 COPY handler.py .
+COPY engine_quality.py .
+COPY engine_tracking.py .
 RUN python3 -c "from ultralytics import YOLO; YOLO('yolo11m.pt')"
 
 CMD ["python3", "-u", "handler.py"]
