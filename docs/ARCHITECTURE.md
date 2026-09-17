@@ -7,9 +7,9 @@ Permettre à un joueur amateur de déposer une vidéo de match, sélectionner le
 ## Pipeline cible
 
 1. **Upload vidéo**
-   - Le navigateur charge la vidéo vers un stockage objet.
+   - Le navigateur découpe la vidéo en parties de 90 Mo et les charge vers R2.
    - Le fichier n'est jamais envoyé directement depuis le navigateur vers RunPod.
-   - L'API génère une URL temporaire signée pour le moteur GPU.
+   - Le bucket reste privé et le Worker génère une URL temporaire signée pour le moteur GPU.
 
 2. **Sélection du joueur**
    - L'utilisateur met la vidéo en pause sur une image où il est visible.
@@ -56,15 +56,11 @@ Moteur RunPod Serverless. Le GPU ne doit être sollicité que pour une analyse v
 Prototype d'interface web. Il fonctionne sans backend pour la sélection locale du joueur et la préparation d'une requête d'analyse.
 
 ### Backend à connecter ensuite
-Responsabilités prévues :
-- comptes utilisateurs ;
-- stockage vidéo ;
-- création des URLs signées ;
-- orchestration des jobs RunPod ;
-- suivi de statut ;
-- historique des matchs ;
-- facturation client ;
-- contrôle du budget GPU.
+Le dossier `worker/` contient le backend Cloudflare prévu pour la première mise
+en production contrôlée : stockage R2, URLs temporaires, registre D1, historique,
+orchestration RunPod, idempotence et contrôle du budget. L'authentification reste
+volontairement limitée à un code d'accès privé pour cette phase. Les comptes
+utilisateurs et la facturation client viendront après la validation technique.
 
 ## Principe de fiabilité
 

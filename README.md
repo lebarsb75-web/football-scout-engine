@@ -53,6 +53,15 @@ python -m unittest discover -s tests -p 'test_*.py'
 - registre local des jobs, rafraîchissement explicite et résultat public filtré ;
 - `ENABLE_PAID_GPU=false` par défaut.
 
+### Backend privé déployable (`worker/`)
+- upload multipart des vidéos vers un bucket R2 privé ;
+- parties de 90 Mo pour accepter les fichiers de match volumineux ;
+- liens de lecture signés et temporaires destinés uniquement à RunPod ;
+- registre D1 durable pour les jobs et l'idempotence ;
+- code d'accès privé conservé uniquement dans l'onglet du navigateur ;
+- suppression de la vidéo en fin de job et nettoyage de secours après 48 heures ;
+- verrou GPU et benchmark obligatoire avant l'upload.
+
 ### Post-traitement (`scripts/`)
 - création de clips avec FFmpeg à partir des fenêtres d'actions ;
 - génération d'un rapport HTML joueur à partir du JSON d'analyse.

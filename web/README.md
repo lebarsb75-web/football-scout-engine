@@ -19,9 +19,11 @@ Le prototype permet de :
 7. retrouver un job existant dans l'historique sans le soumettre une seconde fois ;
 8. exporter un rapport validé en JSON ou en CSV.
 
-Sans URL signée et backend configuré, aucun bouton ne peut soumettre le fichier à
-RunPod. Une fois connecté, le navigateur appelle successivement l'estimation,
-la soumission idempotente, puis le rafraîchissement du job existant.
+Sans backend configuré et code d'accès privé, aucun bouton ne peut soumettre le
+fichier à RunPod. Une fois connecté, le navigateur appelle d'abord l'estimation.
+Si le benchmark court est validé, il envoie ensuite la vidéo en plusieurs parties
+vers le stockage privé, soumet le job de manière idempotente, puis rafraîchit ce
+job existant.
 
 ## Connexion au backend
 

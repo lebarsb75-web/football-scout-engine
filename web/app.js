@@ -10,6 +10,7 @@ const state = {
   activeJob: null,
   lastResult: null,
   lastSummary: null,
+  uploadController: null,
 };
 
 const panels = {
@@ -119,6 +120,8 @@ function loadVideo(file) {
   video.src = state.objectUrl;
   $('#file-name').textContent = file.name;
   $('#file-meta').textContent = formatBytes(file.size);
+  $('#upload-progress').classList.add('hidden');
+  $('#estimate-box').classList.add('hidden');
   resetSelection();
   showView('analysis');
   showPanel('player');
@@ -228,20 +231,42 @@ function reportIdentity() {
   };
 }
 
-const savedApi = localStorage.getItem('footballScoutApiBase');
-if (savedApi) $('#api-base').value = savedApi;
+const configuredApi = window.FOOTBALL_SCOUT_CONFIG?.apiBase?.trim() || '';
+const savedApi = localStorage.getItem('footballScoutApiBase') || '';
+if (configuredApi || savedApi) {
+  $('#api-base').value = configuredApi || savedApi;
+  $('#history-api-base').value = configuredApi || savedApi;
+}
+const savedAccessCode = sessionStorage.getItem('footballScoutAccessCode');
+if (savedAccessCode) {
+  $('#access-code').value = savedAccessCode;
+  $('#history-access-code').value = savedAccessCode;
+}
 $('#api-base').addEventListener('change', () => {
   localStorage.setItem('footballScoutApiBase', $('#api-base').value.trim());
+  $('#history-api-base').value = $('#api-base').value.trim();
+});
+$('#access-code').addEventListener('input', () => {
+  sessionStorage.setItem('footballScoutAccessCode', $('#access-code').value);
+  $('#history-access-code').value = $('#access-code').value;
 });
 
 function apiBase() {
   return $('#api-base').value.trim().replace(/\/$/, '');
 }
 
+function accessCode() {
+  return $('#access-code').value;
+}
+
 async function api(path, options = {}) {
   if (!apiBase()) throw new Error('Le backend de production n’est pas encore configuré');
   const response = await fetch(`${apiBase()}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-App-Access-Code': accessCode(),
+      ...(options.headers || {}),
+    },
     ...options,
   });
   const body = await response.json().catch(() => ({}));
@@ -261,9 +286,67 @@ function idempotencyKey() {
   return key;
 }
 
+function setUploadProgress(percent, message) {
+  const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+  $('#upload-progress').classList.remove('hidden');
+  $('#upload-bar').style.width = `${safePercent}%`;
+  $('#upload-percent').textContent = `${safePercent} %`;
+  $('#upload-status').textContent = message;
+}
+
+async function uploadSelectedVideo() {
+  const prepared = await api('/uploads', {
+    method: 'POST',
+    body: JSON.stringify({
+      filename: state.file.name,
+      content_type: state.file.type || 'application/octet-stream',
+      size_bytes: state.file.size,
+    }),
+  });
+  const partSize = Number(prepared.part_size_bytes);
+  const partCount = Math.ceil(state.file.size / partSize);
+  const parts = [];
+  state.uploadController = new AbortController();
+  try {
+    for (let index = 0; index < partCount; index += 1) {
+      const partNumber = index + 1;
+      const start = index * partSize;
+      const end = Math.min(state.file.size, start + partSize);
+      setUploadProgress(5 + index / partCount * 80, `Envoi sécurisé · partie ${partNumber} sur ${partCount}`);
+      const response = await fetch(`${apiBase()}/uploads/${encodeURIComponent(prepared.upload_id)}/parts/${partNumber}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Upload-Token': prepared.upload_token,
+        },
+        body: state.file.slice(start, end),
+        signal: state.uploadController.signal,
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.detail || `Échec de l’envoi de la partie ${partNumber}`);
+      parts.push(body);
+    }
+    setUploadProgress(90, 'Assemblage sécurisé de la vidéo…');
+    const completed = await api(`/uploads/${encodeURIComponent(prepared.upload_id)}/complete`, {
+      method: 'POST',
+      headers: { 'X-Upload-Token': prepared.upload_token },
+      body: JSON.stringify({ parts }),
+    });
+    setUploadProgress(100, 'Vidéo envoyée et prête pour l’analyse.');
+    return completed.video_url;
+  } catch (error) {
+    fetch(`${apiBase()}/uploads/${encodeURIComponent(prepared.upload_id)}`, {
+      method: 'DELETE',
+      headers: { 'X-Upload-Token': prepared.upload_token },
+    }).catch(() => {});
+    throw error;
+  } finally {
+    state.uploadController = null;
+  }
+}
+
 $('#start-analysis').addEventListener('click', async () => {
   const button = $('#start-analysis');
-  const videoUrl = $('#video-url').value.trim();
   if (!state.target || !Number.isFinite(video.duration)) return showToast('Sélectionne d’abord le joueur.');
   let identity;
   try {
@@ -272,7 +355,7 @@ $('#start-analysis').addEventListener('click', async () => {
     return showToast(error.message);
   }
   if (!apiBase()) return showToast('Le moteur en ligne n’est pas encore connecté à cette version du site.');
-  if (!videoUrl) return showToast('Le stockage vidéo sécurisé doit être connecté avant le lancement.');
+  if (!accessCode()) return showToast('Saisis le code d’accès privé pour continuer.');
   button.disabled = true;
   button.textContent = 'Vérification…';
   try {
@@ -282,8 +365,11 @@ $('#start-analysis').addEventListener('click', async () => {
     });
     if (!estimate.ready) throw new Error('Le benchmark de coût requis n’est pas encore disponible. Aucun GPU n’a été lancé.');
     const max = Number(estimate.recommended_max_authorization_usd);
-    $('#estimate-box').innerHTML = `<strong>Estimation validée</strong><span>Plafond recommandé : ${max.toFixed(2)} $</span>`;
+    $('#estimate-box').innerHTML = `<strong>Estimation validée</strong><span>Plafond recommandé : ${max.toFixed(4)} $</span>`;
     $('#estimate-box').classList.remove('hidden');
+    button.textContent = 'Envoi sécurisé…';
+    const videoUrl = await uploadSelectedVideo();
+    button.textContent = 'Lancement contrôlé…';
     const payload = {
       video_url: videoUrl,
       video_duration_seconds: video.duration,
@@ -299,7 +385,6 @@ $('#start-analysis').addEventListener('click', async () => {
       method: 'POST',
       headers: {
         'X-Idempotency-Key': idempotencyKey(),
-        'X-Cost-Approval-Secret': $('#cost-secret').value,
       },
       body: JSON.stringify(payload),
     });
@@ -488,7 +573,7 @@ function renderHistory(jobs) {
 
 async function loadHistory() {
   const connect = $('#history-connect');
-  if (!apiBase()) {
+  if (!apiBase() || !accessCode()) {
     connect.classList.remove('hidden');
     $('#history-list').innerHTML = '';
     return;
@@ -525,18 +610,30 @@ async function openExistingJob(jobId) {
 
 function newAnalysis() {
   clearTimeout(state.pollTimer);
+  state.uploadController?.abort();
   localStorage.removeItem('footballScoutJobId');
   sessionStorage.removeItem('footballScoutIdempotencyKey');
   state.jobId = null;
   state.activeJob = null;
   state.lastResult = null;
   state.lastSummary = null;
+  $('#upload-progress').classList.add('hidden');
+  $('#estimate-box').classList.add('hidden');
   $('#resume-job').hidden = true;
   showView('analysis');
   showPanel('upload');
 }
 
 $('#refresh-history').addEventListener('click', loadHistory);
+$('#connect-history').addEventListener('click', () => {
+  const base = $('#history-api-base').value.trim();
+  const code = $('#history-access-code').value;
+  $('#api-base').value = base;
+  $('#access-code').value = code;
+  localStorage.setItem('footballScoutApiBase', base);
+  sessionStorage.setItem('footballScoutAccessCode', code);
+  loadHistory();
+});
 $('#stop-polling').addEventListener('click', () => {
   clearTimeout(state.pollTimer);
   showToast('Suivi à l’écran arrêté. Le job n’a pas été relancé.', 'info');
@@ -545,5 +642,6 @@ $('#resume-job').addEventListener('click', () => openExistingJob(state.jobId));
 if (state.jobId) $('#resume-job').hidden = false;
 addEventListener('beforeunload', () => {
   if (state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+  state.uploadController?.abort();
   clearTimeout(state.pollTimer);
 });

@@ -114,6 +114,16 @@ Backend/API, local web prototype, contracts, scripts, tests, CI, and security gu
 - `scripts/build_clips.py`, `scripts/render_report.py`, `scripts/cost_from_result.py`
 - `.github/workflows/quality.yml`
 
+## Private web backend
+- `worker/` contains the production-oriented Cloudflare Worker.
+- R2 binding `VIDEOS` receives 90 MiB multipart video parts and stays private.
+- D1 binding `DB` stores jobs and atomic idempotency reservations.
+- Required Worker secrets: `APP_ACCESS_CODE`, `UPLOAD_SIGNING_SECRET`, `RUNPOD_API_KEY`.
+- The committed configuration deliberately keeps `ENABLE_PAID_GPU=false` and
+  `BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE=0` until the 26 s smoke test passes.
+- The browser must never receive the RunPod key or the upload-signing secret.
+- Video objects are deleted on terminal job refresh and by a 48-hour scheduled cleanup.
+
 ## Execution style
 - Do the work rather than asking the user what technical step to take.
 - Prefer tool calls / direct GitHub and RunPod control.

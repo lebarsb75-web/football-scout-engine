@@ -38,7 +38,12 @@ jobs:
       - name: Unit tests
         run: python -m unittest discover -s tests -p 'test_*.py'
       - name: JavaScript syntax
-        run: node --check web/app.js
+        run: |
+          node --check web/config.js
+          node --check web/app.js
+          node --check worker/src/index.js
+      - name: Private backend tests
+        run: node --test worker/test/*.test.mjs
       - name: Validate JSON contracts
         run: |
           python - <<'PY'
@@ -93,4 +98,7 @@ jobs:
         run: |
           test -f web/index.html
           test -f web/styles.css
+          test -f web/config.js
           test -f web/app.js
+          test -f worker/wrangler.jsonc
+          test -f worker/schema.sql
