@@ -78,6 +78,9 @@ test('worker health reveals readiness without exposing secrets', async () => {
   assert.equal(body.paid_gpu_enabled, false);
   assert.equal(body.runpod_configured, true);
   assert.equal(body.benchmark_available, false);
+  assert.equal(body.max_video_bytes, 4 * 1024 ** 3);
+  assert.equal(body.max_storage_bytes, 8 * 1024 ** 3);
+  assert.equal(body.video_retention_hours, 24);
   assert.equal(JSON.stringify(body).includes('secret'), false);
 });
 
@@ -113,4 +116,34 @@ test('private estimate stays locked before the measured smoke benchmark', async 
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.equal(body.ready, false);
+});
+
+test('upload creation refuses to cross the private R2 storage ceiling', async () => {
+  const request = new Request('https://api.example/uploads', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-App-Access-Code': 'private-code',
+      Origin: 'https://app.example',
+    },
+    body: JSON.stringify({ filename: 'match.mp4', content_type: 'video/mp4', size_bytes: 2 * 1024 ** 3 }),
+  });
+  const response = await worker.fetch(request, {
+    ALLOWED_ORIGIN: 'https://app.example',
+    APP_ACCESS_CODE: 'private-code',
+    UPLOAD_SIGNING_SECRET: 'signing-secret',
+    MAX_VIDEO_BYTES: String(4 * 1024 ** 3),
+    MAX_STORAGE_BYTES: String(8 * 1024 ** 3),
+    VIDEOS: {
+      async list() {
+        return { objects: [{ key: 'uploads/old.mp4', size: 7 * 1024 ** 3 }], truncated: false };
+      },
+      async createMultipartUpload() {
+        assert.fail('an over-budget upload must not be created');
+      },
+    },
+  }, { waitUntil() {} });
+  const body = await response.json();
+  assert.equal(response.status, 400);
+  assert.match(body.detail, /Plafond de stockage gratuit/);
 });
