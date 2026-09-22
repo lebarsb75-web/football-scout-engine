@@ -1,7 +1,9 @@
 const PART_SIZE_BYTES = 90 * 1024 * 1024;
-const DEFAULT_MAX_VIDEO_BYTES = 12 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_STORAGE_BYTES = 8 * 1024 * 1024 * 1024;
 const UPLOAD_TTL_SECONDS = 2 * 60 * 60;
 const DOWNLOAD_TTL_SECONDS = 24 * 60 * 60;
+const VIDEO_RETENTION_HOURS = 24;
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'timed_out', 'cancelled']);
 const ALLOWED_VIDEO_TYPES = new Set([
   'video/mp4',
@@ -115,6 +117,17 @@ function safeExtension(filename) {
 function positiveNumber(value, fallback = null) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function storedVideoBytes(bucket) {
+  let total = 0;
+  let cursor;
+  do {
+    const page = await bucket.list({ prefix: 'uploads/', limit: 500, cursor });
+    total += page.objects.reduce((sum, object) => sum + number(object.size), 0);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return total;
 }
 
 export function estimateCost(durationSeconds, env) {
@@ -251,8 +264,13 @@ async function createUpload(request, env) {
   const body = await readJson(request);
   const sizeBytes = positiveNumber(body.size_bytes);
   const maxBytes = positiveNumber(env.MAX_VIDEO_BYTES, DEFAULT_MAX_VIDEO_BYTES);
+  const maxStorageBytes = positiveNumber(env.MAX_STORAGE_BYTES, DEFAULT_MAX_STORAGE_BYTES);
   const contentType = String(body.content_type || 'application/octet-stream').toLowerCase();
   if (!sizeBytes || sizeBytes > maxBytes) throw new Error(`La vidéo doit peser moins de ${Math.round(maxBytes / 1024 ** 3)} Go.`);
+  const storedBytes = await storedVideoBytes(env.VIDEOS);
+  if (storedBytes + sizeBytes > maxStorageBytes) {
+    throw new Error('Plafond de stockage gratuit atteint. Attendez la suppression automatique des anciennes vidéos.');
+  }
   if (!ALLOWED_VIDEO_TYPES.has(contentType)) throw new Error('Format vidéo non pris en charge.');
   const key = `uploads/${Date.now()}-${crypto.randomUUID()}.${safeExtension(body.filename)}`;
   const upload = await env.VIDEOS.createMultipartUpload(key, {
@@ -281,7 +299,8 @@ async function createUpload(request, env) {
 async function uploadPart(request, env, uploadId, partNumber) {
   const token = await verifyToken(request.headers.get('X-Upload-Token'), env.UPLOAD_SIGNING_SECRET, 'upload');
   if (token.uploadId !== uploadId) throw new Error('Upload token mismatch');
-  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) throw new Error('Invalid part number');
+  const maxPartNumber = Math.ceil(number(token.size) / PART_SIZE_BYTES);
+  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > maxPartNumber) throw new Error('Invalid part number');
   const contentLength = number(request.headers.get('Content-Length'));
   if (contentLength > PART_SIZE_BYTES) throw new Error('Video part is too large');
   const upload = env.VIDEOS.resumeMultipartUpload(token.key, token.uploadId);
@@ -304,6 +323,11 @@ async function completeUpload(request, env, uploadId) {
   if (token.size && object.size !== token.size) {
     await env.VIDEOS.delete(token.key);
     throw new Error('Uploaded video size does not match the selected file');
+  }
+  const maxStorageBytes = positiveNumber(env.MAX_STORAGE_BYTES, DEFAULT_MAX_STORAGE_BYTES);
+  if (await storedVideoBytes(env.VIDEOS) > maxStorageBytes) {
+    await env.VIDEOS.delete(token.key);
+    throw new Error('Plafond de stockage gratuit atteint. La nouvelle vidéo a été supprimée.');
   }
   const downloadToken = await createToken({
     scope: 'download',
@@ -498,7 +522,7 @@ async function refreshJob(request, env, jobId, ctx) {
 }
 
 async function cleanupOldVideos(env) {
-  const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+  const cutoff = Date.now() - VIDEO_RETENTION_HOURS * 60 * 60 * 1000;
   let cursor;
   do {
     const page = await env.VIDEOS.list({ prefix: 'uploads/', limit: 500, cursor, include: ['customMetadata'] });
@@ -521,6 +545,9 @@ async function handle(request, env, ctx) {
       runpod_configured: Boolean(env.RUNPOD_ENDPOINT_ID && env.RUNPOD_API_KEY),
       benchmark_available: Boolean(positiveNumber(env.BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE)),
       storage: 'r2_private_multipart',
+      max_video_bytes: positiveNumber(env.MAX_VIDEO_BYTES, DEFAULT_MAX_VIDEO_BYTES),
+      max_storage_bytes: positiveNumber(env.MAX_STORAGE_BYTES, DEFAULT_MAX_STORAGE_BYTES),
+      video_retention_hours: VIDEO_RETENTION_HOURS,
       job_registry: 'd1_durable',
     });
   }
