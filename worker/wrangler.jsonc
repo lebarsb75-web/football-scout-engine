@@ -8,9 +8,11 @@
   "vars": {
     "ALLOWED_ORIGIN": "https://lebarsb75-web.github.io",
     "RUNPOD_ENDPOINT_ID": "47kdwxukrvp695",
-    "GPU_PRICE_PER_HOUR": "0.58",
-    "BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE": "0",
-    "ENABLE_PAID_GPU": "false",
+    "GPU_PRICE_PER_HOUR": "0.69",
+    "BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE": "53.0",
+    "ENABLE_PAID_GPU": "true",
+    "MAX_JOB_COST_USD": "1.00",
+    "RUNPOD_IDLE_TIMEOUT_SECONDS": "5",
     "MAX_VIDEO_BYTES": "4294967296",
     "MAX_STORAGE_BYTES": "8589934592"
   },
