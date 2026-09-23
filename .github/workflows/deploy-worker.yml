@@ -129,10 +129,15 @@ jobs:
           )"
           node -e '
             const response = JSON.parse(process.argv[1]);
-            if (!response.success || !response.result?.subdomain) {
-              throw new Error(`Unable to create workers.dev subdomain: ${JSON.stringify(response.errors || response)}`);
+            const alreadyConfigured = response.errors?.some(error => error.code === 10036);
+            if (!response.success && !alreadyConfigured) {
+              throw new Error(`Unable to configure workers.dev subdomain: ${JSON.stringify(response.errors || response)}`);
             }
-            console.log(`Workers subdomain ready: ${response.result.subdomain}.workers.dev`);
+            if (alreadyConfigured) {
+              console.log("Workers subdomain already configured.");
+            } else {
+              console.log(`Workers subdomain ready: ${response.result.subdomain}.workers.dev`);
+            }
           ' "$response"
 
       - name: Deploy Worker with private secrets
