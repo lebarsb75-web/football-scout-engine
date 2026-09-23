@@ -83,11 +83,14 @@ jobs:
               "running", "initializing", "throttled", "unhealthy"
           )):
               raise SmokeTestError(f"Endpoint is not clean before smoke test: {workers}")
-          worker_total = sum(
-              int(value) for value in workers.values() if isinstance(value, (int, float))
+          # RunPod reports the same available worker in both idle and ready.
+          # Active/error lifecycle states were rejected above; count availability once.
+          available_workers = max(
+              int(workers.get("idle", 0)),
+              int(workers.get("ready", 0)),
           )
-          if worker_total > 1:
-              raise SmokeTestError(f"Unsafe worker count: {worker_total}")
+          if available_workers > 1:
+              raise SmokeTestError(f"Unsafe available worker count: {available_workers}")
 
           request_payload = copy.deepcopy(payload)
           request_payload["policy"] = {
