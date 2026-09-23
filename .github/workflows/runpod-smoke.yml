@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install smoke-test dependencies
-        run: python -m pip install --disable-pip-version-check requests
+        run: python -m pip install --disable-pip-version-check requests==2.32.5
       - name: Verify endpoint-scoped RunPod access without a paid job
         env:
           PYTHONPATH: .
