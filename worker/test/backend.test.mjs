@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import worker, { canonicalJson, createToken, estimateCost, publicResult, verifyToken } from '../src/index.js';
+import worker, { canonicalJson, createToken, estimateCost, publicResult, runpodBudgetPolicy, verifyToken } from '../src/index.js';
 
 test('cost estimate stays locked without a measured benchmark', () => {
   const result = estimateCost(26, { GPU_PRICE_PER_HOUR: '0.58', BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE: '0' });
@@ -15,6 +15,19 @@ test('cost estimate matches the Python safety margin', () => {
   assert.equal(result.estimated_gpu_seconds, 60);
   assert.equal(result.estimated_cost_usd, 0.0097);
   assert.equal(result.recommended_max_authorization_usd, 0.013);
+});
+
+test('RunPod execution policy cannot outspend the approved job budget', () => {
+  const env = {
+    GPU_PRICE_PER_HOUR: '0.69',
+    MAX_JOB_COST_USD: '1.00',
+    RUNPOD_IDLE_TIMEOUT_SECONDS: '5',
+  };
+  const policy = runpodBudgetPolicy(0.62, env);
+  const maximumBillableCost = (policy.executionTimeout / 1000 + 5) / 3600 * 0.69;
+  assert.ok(maximumBillableCost <= 0.62);
+  assert.ok(policy.ttl > policy.executionTimeout);
+  assert.throws(() => runpodBudgetPolicy(1.01, env), /limite par analyse/);
 });
 
 test('signed upload tokens enforce scope and expiry', async () => {
