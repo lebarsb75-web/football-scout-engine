@@ -155,6 +155,20 @@ export function estimateCost(durationSeconds, env) {
   };
 }
 
+export function runpodBudgetPolicy(approvedMaxCostUsd, env) {
+  const approved = positiveNumber(approvedMaxCostUsd);
+  const price = positiveNumber(env.GPU_PRICE_PER_HOUR, 0.69);
+  const hardCap = positiveNumber(env.MAX_JOB_COST_USD, 1);
+  const idleSeconds = positiveNumber(env.RUNPOD_IDLE_TIMEOUT_SECONDS, 5);
+  if (!approved || approved > hardCap) throw new Error('Le plafond autorisé dépasse la limite par analyse.');
+  const totalBillableSeconds = approved / price * 3600;
+  const executionSeconds = Math.max(1, Math.floor(totalBillableSeconds - idleSeconds));
+  return {
+    executionTimeout: executionSeconds * 1000,
+    ttl: (executionSeconds + 600) * 1000,
+  };
+}
+
 function number(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -426,9 +440,11 @@ async function submitAnalysis(request, env) {
   const estimate = estimateCost(duration, env);
   if (!estimate.ready) return fail(request, env, 412, estimate.message);
   const approved = positiveNumber(body.approved_max_cost_usd);
-  if (!approved || approved > 25 || approved < estimate.recommended_max_authorization_usd) {
-    return fail(request, env, 412, 'Le plafond autorisé ne couvre pas l’estimation de coût.');
+  const maxJobCost = positiveNumber(env.MAX_JOB_COST_USD, 1);
+  if (!approved || approved > maxJobCost || approved < estimate.recommended_max_authorization_usd) {
+    return fail(request, env, 412, `Le plafond autorisé doit couvrir l’estimation sans dépasser ${maxJobCost.toFixed(2)} $.`);
   }
+  const providerPolicy = runpodBudgetPolicy(approved, env);
   const playerProfile = validatePlayerProfile(body.player_profile);
   const matchContext = validateMatchContext(body.match_context);
   const normalized = {
@@ -455,14 +471,17 @@ async function submitAnalysis(request, env) {
   const providerResponse = await fetch(`https://api.runpod.ai/v2/${env.RUNPOD_ENDPOINT_ID}/run`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.RUNPOD_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ input: {
-      video_url: normalized.video_url,
-      target: normalized.target,
-      target_time_seconds: normalized.target_time_seconds,
-      sample_fps: normalized.sample_fps,
-      confidence: normalized.confidence,
-      image_size: normalized.image_size,
-    } }),
+    body: JSON.stringify({
+      input: {
+        video_url: normalized.video_url,
+        target: normalized.target,
+        target_time_seconds: normalized.target_time_seconds,
+        sample_fps: normalized.sample_fps,
+        confidence: normalized.confidence,
+        image_size: normalized.image_size,
+      },
+      policy: providerPolicy,
+    }),
   });
   if (!providerResponse.ok) return fail(request, env, 502, 'RunPod n’a pas accepté la soumission. La clé reste réservée pour éviter un double envoi.');
   const providerBody = await providerResponse.json();
@@ -544,6 +563,7 @@ async function handle(request, env, ctx) {
       paid_gpu_enabled: String(env.ENABLE_PAID_GPU).toLowerCase() === 'true',
       runpod_configured: Boolean(env.RUNPOD_ENDPOINT_ID && env.RUNPOD_API_KEY),
       benchmark_available: Boolean(positiveNumber(env.BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE)),
+      max_job_cost_usd: positiveNumber(env.MAX_JOB_COST_USD, 1),
       storage: 'r2_private_multipart',
       max_video_bytes: positiveNumber(env.MAX_VIDEO_BYTES, DEFAULT_MAX_VIDEO_BYTES),
       max_storage_bytes: positiveNumber(env.MAX_STORAGE_BYTES, DEFAULT_MAX_STORAGE_BYTES),
