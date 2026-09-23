@@ -30,5 +30,6 @@ jobs:
         run: python -m pip install --disable-pip-version-check requests
       - name: Verify RunPod without submitting a paid job
         env:
+          PYTHONPATH: .
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
         run: python scripts/runpod_smoke_test.py
