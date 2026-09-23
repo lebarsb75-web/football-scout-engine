@@ -54,9 +54,15 @@ jobs:
           response.raise_for_status()
           health = response.json()
           jobs = health.get("jobs") or {}
+          workers = health.get("workers") or {}
+          print(json.dumps({
+              "endpoint_id": endpoint_id,
+              "jobs": jobs,
+              "workers": workers,
+              "submitted_paid_job": False,
+          }, indent=2, sort_keys=True), flush=True)
           if int(jobs.get("inQueue", 0)) or int(jobs.get("inProgress", 0)):
               raise SystemExit("Endpoint already has a queued or running job")
-          workers = health.get("workers") or {}
           worker_total = sum(
               int(value) for value in workers.values() if isinstance(value, (int, float))
           )
