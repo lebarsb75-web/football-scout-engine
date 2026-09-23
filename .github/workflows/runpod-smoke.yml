@@ -28,8 +28,46 @@ jobs:
           python-version: '3.11'
       - name: Install smoke-test dependencies
         run: python -m pip install --disable-pip-version-check requests
-      - name: Verify RunPod without submitting a paid job
+      - name: Verify endpoint-scoped RunPod access without a paid job
         env:
           PYTHONPATH: .
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-        run: python scripts/runpod_smoke_test.py
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import requests
+
+          from scripts.runpod_smoke_test import load_exact_payload, verify_local_engine_version
+
+          endpoint_id = "47kdwxukrvp695"
+          load_exact_payload(Path("benchmarks/test-02-gameplay.json"))
+          verify_local_engine_version(Path("handler.py"))
+
+          response = requests.get(
+              f"https://api.runpod.ai/v2/{endpoint_id}/health",
+              headers={"Authorization": f"Bearer {os.environ['RUNPOD_API_KEY']}"},
+              timeout=45,
+          )
+          response.raise_for_status()
+          health = response.json()
+          jobs = health.get("jobs") or {}
+          if int(jobs.get("inQueue", 0)) or int(jobs.get("inProgress", 0)):
+              raise SystemExit("Endpoint already has a queued or running job")
+          workers = health.get("workers") or {}
+          worker_total = sum(
+              int(value) for value in workers.values() if isinstance(value, (int, float))
+          )
+          if worker_total > 1:
+              raise SystemExit(f"Unsafe worker count: {worker_total}")
+          print(json.dumps({
+              "passed": True,
+              "endpoint_id": endpoint_id,
+              "engine_version": "2.4-dev",
+              "jobs": jobs,
+              "workers": workers,
+              "submitted_paid_job": False,
+          }, indent=2, sort_keys=True))
+          PY
