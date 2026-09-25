@@ -294,6 +294,25 @@ function setUploadProgress(percent, message) {
   $('#upload-status').textContent = message;
 }
 
+async function completeMultipartUpload(prepared, parts) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await api(`/uploads/${encodeURIComponent(prepared.upload_id)}/complete`, {
+        method: 'POST',
+        headers: { 'X-Upload-Token': prepared.upload_token },
+        body: JSON.stringify({ parts }),
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3) break;
+      setUploadProgress(90, `Connexion instable · nouvel essai d’assemblage (${attempt + 1}/3)…`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 750));
+    }
+  }
+  throw new Error(`Impossible d’assembler la vidéo après 3 essais : ${lastError.message}`);
+}
+
 async function uploadSelectedVideo() {
   const prepared = await api('/uploads', {
     method: 'POST',
@@ -327,11 +346,7 @@ async function uploadSelectedVideo() {
       parts.push(body);
     }
     setUploadProgress(90, 'Assemblage sécurisé de la vidéo…');
-    const completed = await api(`/uploads/${encodeURIComponent(prepared.upload_id)}/complete`, {
-      method: 'POST',
-      headers: { 'X-Upload-Token': prepared.upload_token },
-      body: JSON.stringify({ parts }),
-    });
+    const completed = await completeMultipartUpload(prepared, parts);
     setUploadProgress(100, 'Vidéo envoyée et prête pour l’analyse.');
     return completed.video_url;
   } catch (error) {

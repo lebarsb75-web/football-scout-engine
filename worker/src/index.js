@@ -325,6 +325,8 @@ async function uploadPart(request, env, uploadId, partNumber) {
 async function completeUpload(request, env, uploadId) {
   const token = await verifyToken(request.headers.get('X-Upload-Token'), env.UPLOAD_SIGNING_SECRET, 'upload');
   if (token.uploadId !== uploadId) throw new Error('Upload token mismatch');
+  const existingObject = await env.VIDEOS.head(token.key);
+  if (existingObject) return completedUploadResponse(request, env, token, existingObject, false);
   const body = await readJson(request);
   if (!Array.isArray(body.parts) || !body.parts.length) throw new Error('No uploaded parts supplied');
   const parts = body.parts.map((part) => ({
@@ -334,12 +336,16 @@ async function completeUpload(request, env, uploadId) {
   if (parts.some((part, index) => part.partNumber !== index + 1 || !part.etag)) throw new Error('Invalid uploaded parts');
   const upload = env.VIDEOS.resumeMultipartUpload(token.key, token.uploadId);
   const object = await upload.complete(parts);
+  return completedUploadResponse(request, env, token, object, true);
+}
+
+async function completedUploadResponse(request, env, token, object, enforceStorageLimit) {
   if (token.size && object.size !== token.size) {
     await env.VIDEOS.delete(token.key);
     throw new Error('Uploaded video size does not match the selected file');
   }
   const maxStorageBytes = positiveNumber(env.MAX_STORAGE_BYTES, DEFAULT_MAX_STORAGE_BYTES);
-  if (await storedVideoBytes(env.VIDEOS) > maxStorageBytes) {
+  if (enforceStorageLimit && await storedVideoBytes(env.VIDEOS) > maxStorageBytes) {
     await env.VIDEOS.delete(token.key);
     throw new Error('Plafond de stockage gratuit atteint. La nouvelle vidéo a été supprimée.');
   }

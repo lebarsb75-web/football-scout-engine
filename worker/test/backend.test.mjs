@@ -160,3 +160,41 @@ test('upload creation refuses to cross the private R2 storage ceiling', async ()
   assert.equal(response.status, 400);
   assert.match(body.detail, /Plafond de stockage gratuit/);
 });
+
+test('upload completion can be retried after the object was already assembled', async () => {
+  const uploadId = 'upload-123';
+  const token = await createToken({
+    scope: 'upload',
+    key: 'uploads/retry.mp4',
+    uploadId,
+    size: 123,
+    exp: Math.floor(Date.now() / 1000) + 60,
+  }, 'signing-secret');
+  const request = new Request(`https://api.example/uploads/${uploadId}/complete`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Upload-Token': token,
+      Origin: 'https://app.example',
+    },
+    body: JSON.stringify({ parts: [{ part_number: 1, etag: 'already-used' }] }),
+  });
+  const response = await worker.fetch(request, {
+    ALLOWED_ORIGIN: 'https://app.example',
+    UPLOAD_SIGNING_SECRET: 'signing-secret',
+    VIDEOS: {
+      async head(key) {
+        assert.equal(key, 'uploads/retry.mp4');
+        return { size: 123 };
+      },
+      async resumeMultipartUpload() {
+        assert.fail('an already assembled object must not resume the multipart upload');
+      },
+    },
+  }, { waitUntil() {} });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.uploaded, true);
+  assert.equal(body.size_bytes, 123);
+  assert.match(body.video_url, /^https:\/\/api\.example\/videos\?token=/);
+});
