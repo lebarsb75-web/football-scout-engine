@@ -1,0 +1,164 @@
+name: runpod-smoke-26s-once
+
+on:
+  push:
+    branches: [dev-v2]
+    paths:
+      - '.github/workflows/runpod-smoke-execute.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runpod-smoke-26s-once
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install smoke-test dependencies
+        run: python -m pip install --disable-pip-version-check requests==2.32.5
+      - name: Run exactly one protected 26-second smoke test
+        env:
+          PYTHONPATH: .
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          python - <<'PY'
+          import copy
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          import requests
+
+          from scripts.runpod_smoke_test import (
+              EXECUTION_TIMEOUT_MS,
+              EXPECTED_ENDPOINT_ID,
+              INVOKE_BASE_URL,
+              SmokeTestError,
+              load_exact_payload,
+              poll_job,
+              request_json,
+              validate_engine_result,
+              verify_local_engine_version,
+              write_record,
+          )
+
+          endpoint_id = EXPECTED_ENDPOINT_ID
+          hourly_price_usd = 0.69
+          execution_ceiling_seconds = 120
+          idle_timeout_seconds = 5
+          wall_ceiling_seconds = 250
+          cost_ceiling_usd = 0.05
+          conservative_cost = (
+              (execution_ceiling_seconds + idle_timeout_seconds)
+              / 3600
+              * hourly_price_usd
+          )
+          if conservative_cost > cost_ceiling_usd:
+              raise SystemExit("Configured smoke-test cost ceiling is unsafe")
+
+          payload = load_exact_payload(Path("benchmarks/test-02-gameplay.json"))
+          verify_local_engine_version(Path("handler.py"))
+          session = requests.Session()
+          session.headers.update({
+              "Authorization": f"Bearer {os.environ['RUNPOD_API_KEY']}"
+          })
+
+          health = request_json(
+              session, "GET", f"{INVOKE_BASE_URL}/{endpoint_id}/health"
+          )
+          jobs = health.get("jobs") or {}
+          if int(jobs.get("inQueue", 0)) or int(jobs.get("inProgress", 0)):
+              raise SmokeTestError("Endpoint already has a queued or running job")
+          workers = health.get("workers") or {}
+          if any(int(workers.get(state, 0)) for state in (
+              "running", "initializing", "throttled", "unhealthy"
+          )):
+              raise SmokeTestError(f"Endpoint is not clean before smoke test: {workers}")
+          # RunPod reports the same available worker in both idle and ready.
+          # Active/error lifecycle states were rejected above; count availability once.
+          available_workers = max(
+              int(workers.get("idle", 0)),
+              int(workers.get("ready", 0)),
+          )
+          if available_workers > 1:
+              raise SmokeTestError(f"Unsafe available worker count: {available_workers}")
+
+          request_payload = copy.deepcopy(payload)
+          request_payload["policy"] = {
+              "executionTimeout": EXECUTION_TIMEOUT_MS,
+              "ttl": wall_ceiling_seconds * 1000,
+          }
+          submitted_at = datetime.now(timezone.utc).isoformat()
+          submission = request_json(
+              session,
+              "POST",
+              f"{INVOKE_BASE_URL}/{endpoint_id}/run",
+              json=request_payload,
+          )
+          job_id = str(submission.get("id") or "")
+          if not job_id:
+              raise SmokeTestError("RunPod returned no job ID; do not resubmit")
+          print(json.dumps({
+              "mode": "submitted_once",
+              "job_id": job_id,
+              "status": submission.get("status"),
+          }))
+
+          provider_result, elapsed = poll_job(
+              session,
+              endpoint_id,
+              job_id,
+              poll_interval_seconds=3,
+              max_wall_seconds=wall_ceiling_seconds,
+          )
+          output = provider_result.get("output")
+          if not isinstance(output, dict):
+              raise SmokeTestError("Provider result has no object output")
+          validation = validate_engine_result(output)
+          execution_ms = float(provider_result.get("executionTime") or 0)
+          estimated_cost = execution_ms / 3_600_000 * hourly_price_usd
+          if estimated_cost > cost_ceiling_usd:
+              raise SmokeTestError(
+                  f"Observed estimated cost ${estimated_cost:.4f} exceeded ceiling"
+              )
+          record = {
+              "test": "v2.4 26-second panoramic RunPod smoke",
+              "submitted_at": submitted_at,
+              "endpoint_id": endpoint_id,
+              "request": request_payload,
+              "job_id": job_id,
+              "provider_status": provider_result.get("status"),
+              "provider_execution_time_ms": execution_ms,
+              "provider_delay_time_ms": provider_result.get("delayTime"),
+              "poll_elapsed_seconds": round(elapsed, 2),
+              "serverless_price_per_hour_usd": hourly_price_usd,
+              "conservative_cost_bound_usd": round(conservative_cost, 6),
+              "estimated_execution_cost_usd": round(estimated_cost, 6),
+              "validation": validation,
+              "provider_result": provider_result,
+          }
+          record_path = write_record(Path("outputs/runpod"), record)
+          print(json.dumps({
+              "provider_status": provider_result.get("status"),
+              "estimated_execution_cost_usd": round(estimated_cost, 6),
+              "validation": validation,
+              "record_path": str(record_path),
+          }, indent=2, sort_keys=True))
+          PY
+      - name: Preserve smoke-test record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runpod-smoke-26s-record
+          path: outputs/runpod/*.json
+          if-no-files-found: ignore
+          retention-days: 30
