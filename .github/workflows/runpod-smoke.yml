@@ -63,11 +63,18 @@ jobs:
           }, indent=2, sort_keys=True), flush=True)
           if int(jobs.get("inQueue", 0)) or int(jobs.get("inProgress", 0)):
               raise SystemExit("Endpoint already has a queued or running job")
-          worker_total = sum(
-              int(value) for value in workers.values() if isinstance(value, (int, float))
+          if any(int(workers.get(state, 0)) for state in (
+              "running", "initializing", "throttled", "unhealthy"
+          )):
+              raise SystemExit(f"Endpoint has an unsafe worker state: {workers}")
+          # RunPod exposes one available worker in both `idle` and `ready`.
+          # These counters overlap, so count availability once.
+          available_workers = max(
+              int(workers.get("idle", 0)),
+              int(workers.get("ready", 0)),
           )
-          if worker_total > 1:
-              raise SystemExit(f"Unsafe worker count: {worker_total}")
+          if available_workers > 1:
+              raise SystemExit(f"Unsafe available worker count: {available_workers}")
           print(json.dumps({
               "passed": True,
               "endpoint_id": endpoint_id,
