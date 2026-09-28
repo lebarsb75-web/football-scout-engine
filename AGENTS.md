@@ -30,7 +30,7 @@ Build the football scouting platform end-to-end with minimal user intervention. 
 - Branch target: `dev-v2`
 
 ## Current engine state
-- Current intended engine: `2.4-dev`
+- Current intended engine: `2.5-dev`
 - Model: `yolo11m.pt`
 - V2.3 fixed forward seeding from `target_time_seconds` after V2.2 produced 0% coverage.
 - V2.4 adds BoT-SORT camera-motion compensation, exact timestamp-based sampling, direct tracker reset between jobs, anchor-distance rejection, temporal continuity diagnostics, identity-churn gates, and fail-closed API result exposure.
@@ -40,7 +40,7 @@ Build the football scouting platform end-to-end with minimal user intervention. 
 - This is not ground-truth validation. Annotated full-match validation is still required.
 
 ## Current RunPod deployment gate
-- Before any new runtime test, verify that the active build contains `ENGINE_VERSION = "2.4-dev"`, the endpoint is Ready, minimum workers is 0 and maximum workers is 1.
+- Before any new runtime test, verify that the active build contains `ENGINE_VERSION = "2.5-dev"`, the endpoint is Ready, minimum workers is 0 and maximum workers is 1.
 - Verify current balance and GPU price before submission.
 - RunPod credentials are not stored in the repository.
 

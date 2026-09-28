@@ -23,7 +23,7 @@ from api.results import public_result
 
 
 EXPECTED_ENDPOINT_ID = "47kdwxukrvp695"
-EXPECTED_ENGINE_VERSION = "2.4-dev"
+EXPECTED_ENGINE_VERSION = "2.5-dev"
 EXPECTED_PAYLOAD = {
     "input": {
         "video_url": "https://raw.githubusercontent.com/AtomScott/SoccerTrack-v2/main/docs/assets/demo-gsr_and_bas.mp4",

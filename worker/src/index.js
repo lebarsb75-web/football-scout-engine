@@ -130,10 +130,11 @@ async function storedVideoBytes(bucket) {
   return total;
 }
 
-export function estimateCost(durationSeconds, env) {
+export function estimateCost(durationSeconds, env, sampleFps = 10) {
   const duration = positiveNumber(durationSeconds);
   const price = positiveNumber(env.GPU_PRICE_PER_HOUR, 0.58);
   const benchmark = positiveNumber(env.BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE);
+  const normalizedSampleFps = Math.min(10, Math.max(1, number(sampleFps, 10)));
   if (!duration) throw new Error('video_duration_seconds must be > 0');
   if (!benchmark) {
     return {
@@ -142,12 +143,15 @@ export function estimateCost(durationSeconds, env) {
       message: 'Le test GPU court doit être validé avant toute analyse payante.',
     };
   }
-  const estimatedGpuSeconds = duration / 60 * benchmark;
+  const workloadFactor = 0.12 + 0.88 * (normalizedSampleFps / 10);
+  const estimatedGpuSeconds = duration / 60 * benchmark * workloadFactor;
   const estimatedCost = estimatedGpuSeconds / 3600 * price;
   return {
     ready: true,
     gpu_price_per_hour_usd: Number(price.toFixed(4)),
     benchmark_gpu_seconds_per_video_minute: Number(benchmark.toFixed(3)),
+    sample_fps: normalizedSampleFps,
+    workload_factor: Number(workloadFactor.toFixed(3)),
     estimated_gpu_seconds: Number(estimatedGpuSeconds.toFixed(1)),
     estimated_cost_usd: Number(estimatedCost.toFixed(4)),
     recommended_max_authorization_usd: Number((estimatedCost * 1.35).toFixed(4)),
@@ -187,6 +191,11 @@ export function publicResult(engineResult) {
   const calibrationUsed = Boolean(quality.pitch_calibration_used);
   const continuityOk = quality.tracking_continuity_reliable === true;
   const trackingOk = tracking >= 80 && playerQuality >= 82 && continuityOk;
+  const trackedSeconds = number(player.tracked_seconds_estimated);
+  const reliableSegments = Math.max(0, Math.trunc(number(player.reliable_segment_count)));
+  const longestSequence = number(player.longest_tracked_sequence_seconds);
+  const analyzedDuration = number(engineResult.video?.analysis_duration_seconds);
+  const usefulPartialTracking = tracking >= 20 && trackedSeconds >= 3 && reliableSegments >= 1;
   const ballOk = trackingOk && quality.ball_metrics_reliable === true && ballVisibility >= 40;
   const distanceAvailable = trackingOk && calibrationUsed && 'distance_meters_estimated' in player;
   const touchesAvailable = ballOk && 'ball_touches_estimated' in player;
@@ -203,7 +212,7 @@ export function publicResult(engineResult) {
     }
   }
   return {
-    status: trackingOk ? 'ready' : 'review_required',
+    status: trackingOk ? 'ready' : usefulPartialTracking ? 'partial' : 'review_required',
     engine_version: engineResult.engine_version,
     quality: {
       score_percent: Number(qualityScore.toFixed(1)),
@@ -214,9 +223,15 @@ export function publicResult(engineResult) {
       tracking_pass: trackingOk,
       ball_metrics_pass: ballOk,
       pitch_calibration_used: calibrationUsed,
+      scene_cuts_detected: Math.max(0, Math.trunc(number(quality.scene_cuts_detected))),
+      scene_cuts_recovered: Math.max(0, Math.trunc(number(quality.scene_cuts_recovered))),
     },
     metrics: {
       tracking_coverage_percent: { available: true, value: Number(tracking.toFixed(1)), confidence: 'diagnostic' },
+      tracked_time_seconds: { available: true, value: Number(trackedSeconds.toFixed(1)), confidence: 'diagnostic' },
+      analyzed_time_seconds: { available: true, value: Number(analyzedDuration.toFixed(1)), confidence: 'diagnostic' },
+      reliable_sequences: { available: true, value: reliableSegments, confidence: 'diagnostic' },
+      longest_sequence_seconds: { available: true, value: Number(longestSequence.toFixed(1)), confidence: 'diagnostic' },
       distance_meters: distanceAvailable
         ? { available: true, value: Number(number(player.distance_meters_estimated).toFixed(1)), confidence: 'estimated' }
         : { available: false, reason: calibrationUsed ? 'tracking_quality_too_low' : 'pitch_calibration_required' },
@@ -443,7 +458,7 @@ async function submitAnalysis(request, env) {
   const videoUrl = new URL(String(body.video_url || ''));
   if (videoUrl.origin !== new URL(request.url).origin || videoUrl.pathname !== '/videos') throw new Error('La vidéo doit provenir du stockage privé Football Scout.');
   const downloadToken = await verifyToken(videoUrl.searchParams.get('token'), env.UPLOAD_SIGNING_SECRET, 'download');
-  const estimate = estimateCost(duration, env);
+  const estimate = estimateCost(duration, env, body.sample_fps);
   if (!estimate.ready) return fail(request, env, 412, estimate.message);
   const approved = positiveNumber(body.approved_max_cost_usd);
   const maxJobCost = positiveNumber(env.MAX_JOB_COST_USD, 1);
@@ -588,7 +603,7 @@ async function handle(request, env, ctx) {
   if (request.method === 'POST' && url.pathname === '/analysis/estimate') {
     requireAccess(request, env);
     const body = await readJson(request);
-    return json(request, env, estimateCost(body.video_duration_seconds, env));
+    return json(request, env, estimateCost(body.video_duration_seconds, env, body.sample_fps));
   }
   if (request.method === 'POST' && url.pathname === '/analysis/submit') return submitAnalysis(request, env);
   if (request.method === 'GET' && url.pathname === '/analysis/jobs') return listJobs(request, env);

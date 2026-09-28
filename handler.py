@@ -1,4 +1,5 @@
 import math
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -12,11 +13,12 @@ from ultralytics import YOLO
 from engine_quality import (
     ball_metrics_are_reliable,
     classify_tracking_quality,
+    summarize_tracked_segments,
     summarize_tracking_samples,
 )
 from engine_tracking import iter_sample_frame_indices, reset_model_trackers
 
-ENGINE_VERSION = "2.4-dev"
+ENGINE_VERSION = "2.5-dev"
 MODEL_NAME = "yolo11m.pt"
 MODEL = YOLO(MODEL_NAME)
 PERSON_CLASS = 0
@@ -61,6 +63,34 @@ def download_video(url: str, destination: Path, max_mb: int = 4096) -> int:
     if written == 0:
         raise ValueError("Downloaded video is empty")
     return written
+
+
+def open_video_capture(video_path: Path):
+    """Open common uploads and normalize unusual codecs when OpenCV cannot decode them."""
+    capture = cv2.VideoCapture(str(video_path))
+    if capture.isOpened() and capture.get(cv2.CAP_PROP_FRAME_COUNT) > 0:
+        return capture, False
+    capture.release()
+    normalized_path = video_path.with_name("normalized.mp4")
+    completed = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(video_path),
+            "-map", "0:v:0", "-an", "-c:v", "libx264", "-preset", "veryfast",
+            "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            str(normalized_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    if completed.returncode != 0:
+        raise ValueError("Video codec is not supported and normalization failed")
+    normalized_capture = cv2.VideoCapture(str(normalized_path))
+    if not normalized_capture.isOpened() or normalized_capture.get(cv2.CAP_PROP_FRAME_COUNT) <= 0:
+        normalized_capture.release()
+        raise ValueError("OpenCV could not open the normalized video")
+    return normalized_capture, True
 
 
 def safe_crop(frame, box, torso_only=True):
@@ -151,7 +181,15 @@ def choose_anchor_player(frame, people, target_point):
     )
 
 
-def choose_reidentified_player(frame, people, previous_center, previous_box_height, reference_signature):
+def choose_reidentified_player(
+    frame,
+    people,
+    previous_center,
+    previous_box_height,
+    reference_signature,
+    *,
+    after_scene_cut=False,
+):
     if not people:
         return None, 0.0
     diag = math.hypot(frame.shape[1], frame.shape[0]) or 1.0
@@ -173,9 +211,15 @@ def choose_reidentified_player(frame, people, previous_center, previous_box_heig
         scored.append((score, app, person, signature))
     scored.sort(key=lambda row: row[0], reverse=True)
     best_score, best_app, best_person, best_signature = scored[0]
-    if best_score < 0.40:
+    runner_up_score = scored[1][0] if len(scored) > 1 else 0.0
+    required_score = 0.50 if after_scene_cut else 0.40
+    required_appearance = 0.46 if after_scene_cut else 0.22
+    required_margin = 0.06 if after_scene_cut else 0.0
+    if best_score < required_score:
         return None, best_score
-    if reference_signature is not None and best_app < 0.22 and previous_center is None:
+    if reference_signature is not None and best_app < required_appearance and previous_center is None:
+        return None, best_score
+    if after_scene_cut and best_score - runner_up_score < required_margin:
         return None, best_score
     best_person["signature"] = best_signature
     best_person["appearance_similarity"] = best_app
@@ -267,9 +311,7 @@ def analyze_video(data):
     with tempfile.TemporaryDirectory() as temp_dir:
         video_path = Path(temp_dir) / "match.mp4"
         downloaded_bytes = download_video(video_url, video_path, max_video_mb)
-        capture = cv2.VideoCapture(str(video_path))
-        if not capture.isOpened():
-            raise ValueError("OpenCV could not open the downloaded video")
+        capture, video_normalized = open_video_capture(video_path)
 
         source_fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -346,6 +388,8 @@ def analyze_video(data):
         reidentifications = 0
         identity_rejections = 0
         scene_cuts = 0
+        recovered_scene_cuts = 0
+        awaiting_cut_recovery = False
         rejected_jumps = 0
         possession_samples = 0
         ball_visible_samples = 0
@@ -381,6 +425,7 @@ def analyze_video(data):
             previous_scene = current_scene
             if hard_cut:
                 scene_cuts += 1
+                awaiting_cut_recovery = True
                 selected_track_id = None
                 previous_center = None
                 smoothed_center = None
@@ -441,12 +486,20 @@ def analyze_video(data):
 
             if player is None:
                 player, match_score = choose_reidentified_player(
-                    frame, people, previous_center, previous_box_height, reference_signature
+                    frame,
+                    people,
+                    previous_center,
+                    previous_box_height,
+                    reference_signature,
+                    after_scene_cut=awaiting_cut_recovery,
                 )
                 if player is not None:
                     if selected_track_id != player["id"]:
                         reidentifications += 1
                     selected_track_id = player["id"]
+                    if awaiting_cut_recovery:
+                        recovered_scene_cuts += 1
+                        awaiting_cut_recovery = False
 
             if player is not None:
                 tracked_samples += 1
@@ -560,6 +613,9 @@ def analyze_video(data):
         tracking_summary = summarize_tracking_samples(
             tracking_samples, effective_sample_fps
         )
+        segment_summary = summarize_tracked_segments(
+            tracking_samples, effective_sample_fps
+        )
         coverage = tracking_summary["coverage_percent"]
         ball_visibility = ball_visible_samples / max(1, sampled_frames) * 100.0
         mean_track_score = sum(track_scores) / max(1, len(track_scores))
@@ -592,6 +648,7 @@ def analyze_video(data):
                 "longest_untracked_gap_seconds"
             ],
             scene_cuts=scene_cuts,
+            unrecovered_scene_cuts=max(0, scene_cuts - recovered_scene_cuts),
             reidentification_rate_percent=reidentification_rate,
             identity_rejection_rate_percent=identity_rejection_rate,
         )
@@ -621,6 +678,7 @@ def analyze_video(data):
                 "sample_fps": round(effective_sample_fps, 3),
                 "sampled_frames": sampled_frames,
                 "downloaded_mb": round(downloaded_bytes / 1024 / 1024, 2),
+                "codec_normalized": video_normalized,
             },
             "selection": {
                 "target_time_seconds": round(target_time, 2),
@@ -636,6 +694,11 @@ def analyze_video(data):
                 "last_track_id": selected_track_id,
                 "tracking_coverage_percent": round(coverage, 1),
                 "tracked_seconds_estimated": round(tracked_seconds, 1),
+                "reliable_segment_count": segment_summary["reliable_segment_count"],
+                "reliable_segments": segment_summary["reliable_segments"],
+                "longest_tracked_sequence_seconds": segment_summary[
+                    "longest_tracked_sequence_seconds"
+                ],
                 "reidentifications": reidentifications,
                 "identity_rejections": identity_rejections,
                 "distance_pixels_estimated": round(pixel_path, 1),
@@ -668,6 +731,8 @@ def analyze_video(data):
                 "reidentification_rate_percent": round(reidentification_rate, 1),
                 "identity_rejection_rate_percent": round(identity_rejection_rate, 1),
                 "scene_cuts_detected": scene_cuts,
+                "scene_cuts_recovered": recovered_scene_cuts,
+                "scene_cuts_unrecovered": max(0, scene_cuts - recovered_scene_cuts),
                 "rejected_tracking_jumps": rejected_jumps,
             },
             # Kept in the private worker result. It enables comparison with
@@ -675,7 +740,8 @@ def analyze_video(data):
             # engine results (including this trace).
             "validation": {"tracking_trace": validation_trace},
             "warnings": [
-                "V2.4 analyzes forward from the player-selection frame; pre-selection footage is not included yet.",
+                "V2.5 analyzes forward from the player-selection frame; pre-selection footage is not included yet.",
+                "Broadcast cuts are handled as separate sequences; only confident post-cut identity recoveries are retained.",
                 "Touches and possession remain computer-vision estimates until validated against labelled match footage.",
                 "Broadcast-camera identity can still fail after occlusions or cuts without a dedicated re-identification model.",
             ],

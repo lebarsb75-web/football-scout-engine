@@ -374,9 +374,10 @@ $('#start-analysis').addEventListener('click', async () => {
   button.disabled = true;
   button.textContent = 'Vérification…';
   try {
+    const sampleFps = analysisSampleFps(video.duration);
     const estimate = await api('/analysis/estimate', {
       method: 'POST',
-      body: JSON.stringify({ video_duration_seconds: video.duration }),
+      body: JSON.stringify({ video_duration_seconds: video.duration, sample_fps: sampleFps }),
     });
     if (!estimate.ready) throw new Error('Le benchmark de coût requis n’est pas encore disponible. Aucun GPU n’a été lancé.');
     const max = Number(estimate.recommended_max_authorization_usd);
@@ -390,7 +391,7 @@ $('#start-analysis').addEventListener('click', async () => {
       video_duration_seconds: video.duration,
       target_time_seconds: state.target.time,
       target: { x: state.target.x, y: state.target.y },
-      sample_fps: 10,
+      sample_fps: sampleFps,
       confidence: 0.15,
       image_size: 960,
       approved_max_cost_usd: max,
@@ -464,6 +465,18 @@ function metricCard(title, metric, formatter, reason) {
   return `<article class="metric-card"><span>${title}</span><strong>${formatter(metric.value)}</strong><small>✓ Contrôle de fiabilité passé</small></article>`;
 }
 
+function diagnosticCard(title, metric, formatter, detail) {
+  const value = metric?.available ? formatter(metric.value) : '—';
+  return `<article class="metric-card diagnostic-card"><span>${title}</span><strong>${value}</strong><small>${detail}</small></article>`;
+}
+
+function analysisSampleFps(durationSeconds) {
+  const duration = Number(durationSeconds) || 0;
+  if (duration > 30 * 60) return 5;
+  if (duration > 10 * 60) return 7;
+  return 10;
+}
+
 function summaryWithLocalFallback(summary, jobId) {
   if (summary?.player_profile) return summary;
   if (!jobId) return summary || {};
@@ -486,7 +499,7 @@ function renderResult(result, rawSummary = {}, job = state.activeJob) {
   state.lastResult = result;
   state.lastSummary = summary;
   showView('results');
-  if (result.status !== 'ready') {
+  if (!['ready', 'partial'].includes(result.status)) {
     return renderFailure(
       'Analyse à vérifier',
       'Le suivi du joueur n’a pas franchi tous les contrôles. Les statistiques sont volontairement masquées.',
@@ -504,10 +517,15 @@ function renderResult(result, rawSummary = {}, job = state.activeJob) {
     .join(' · ');
   const trackingScore = Number(quality.player_tracking_score_percent || 0);
   const coverage = Number(quality.tracking_coverage_percent || 0);
+  const partial = result.status === 'partial';
+  const badge = partial ? 'Rapport partiel contrôlé' : 'Suivi validé';
+  const explanation = partial
+    ? 'La vidéo a été analysée par séquences. Les passages fiables restent visibles, sans transformer les changements de caméra ou les pertes de suivi en statistiques certaines.'
+    : 'La distance exige une calibration valide. Les touches et la possession exigent un suivi fiable du ballon.';
   $('#result-content').innerHTML = `
-    <div class="result-head"><div><p class="eyebrow">RAPPORT JOUEUR</p><h1>${playerName}</h1><p>${context || 'Analyse individuelle terminée.'}</p></div><span class="quality-pill">✓ Suivi validé</span></div>
-    <div class="result-summary"><div class="quality-score"><span>Qualité du suivi</span><strong>${trackingScore.toFixed(0)}<small>%</small></strong><p>Couverture : ${coverage.toFixed(1)} %</p><small class="engine-label">Moteur ${escapeHtml(result.engine_version || '—')}</small></div><div class="metrics-grid">${metricCard('Distance parcourue', metrics.distance_meters, (value) => `${(value / 1000).toFixed(2).replace('.', ',')} km`, 'Calibration terrain requise')}${metricCard('Touches de balle', metrics.ball_touches, (value) => String(value), 'Visibilité ballon insuffisante')}${metricCard('Temps de possession', metrics.possession_seconds, (value) => formatTime(value), 'Contrôle ballon non atteint')}</div></div>
-    <section class="quality-explain"><div><p class="eyebrow">TRANSPARENCE</p><h2>Pourquoi certaines données sont masquées</h2><p>La distance exige une calibration valide. Les touches et la possession exigent un suivi fiable du ballon.</p></div><div class="gate-list"><span class="pass">✓ Continuité joueur</span><span class="${quality.ball_metrics_pass ? 'pass' : 'locked'}">${quality.ball_metrics_pass ? '✓' : '—'} Ballon</span><span class="${quality.pitch_calibration_used ? 'pass' : 'locked'}">${quality.pitch_calibration_used ? '✓' : '—'} Calibration</span></div></section>
+    <div class="result-head"><div><p class="eyebrow">RAPPORT JOUEUR</p><h1>${playerName}</h1><p>${context || 'Analyse individuelle terminée.'}</p></div><span class="quality-pill">${partial ? '◐' : '✓'} ${badge}</span></div>
+    <div class="result-summary"><div class="quality-score"><span>Qualité du suivi</span><strong>${trackingScore.toFixed(0)}<small>%</small></strong><p>Couverture : ${coverage.toFixed(1)} %</p><small class="engine-label">Moteur ${escapeHtml(result.engine_version || '—')}</small></div><div class="metrics-grid">${diagnosticCard('Temps réellement suivi', metrics.tracked_time_seconds, (value) => formatTime(value), 'Mesuré sur les images retenues')}${diagnosticCard('Séquences fiables', metrics.reliable_sequences, (value) => String(value), 'Passages continus du joueur')}${diagnosticCard('Meilleure séquence', metrics.longest_sequence_seconds, (value) => formatTime(value), 'Plus longue continuité détectée')}${metricCard('Distance parcourue', metrics.distance_meters, (value) => `${(value / 1000).toFixed(2).replace('.', ',')} km`, 'Calibration terrain requise')}${metricCard('Touches de balle', metrics.ball_touches, (value) => String(value), 'Visibilité ballon insuffisante')}${metricCard('Temps de possession', metrics.possession_seconds, (value) => formatTime(value), 'Contrôle ballon non atteint')}</div></div>
+    <section class="quality-explain"><div><p class="eyebrow">TRANSPARENCE</p><h2>${partial ? 'Ce que la vidéo permet réellement d’analyser' : 'Pourquoi certaines données sont masquées'}</h2><p>${explanation}</p></div><div class="gate-list"><span class="${quality.tracking_continuity_reliable ? 'pass' : 'locked'}">${quality.tracking_continuity_reliable ? '✓' : '◐'} Continuité joueur</span><span class="${quality.ball_metrics_pass ? 'pass' : 'locked'}">${quality.ball_metrics_pass ? '✓' : '—'} Ballon</span><span class="${quality.pitch_calibration_used ? 'pass' : 'locked'}">${quality.pitch_calibration_used ? '✓' : '—'} Calibration</span></div></section>
     ${renderClips(result.clips)}
     <div class="action-row result-actions"><button class="secondary" id="download-json">Rapport JSON</button><button class="secondary" id="download-csv">Exporter en CSV</button><button class="primary" id="new-analysis">Nouvelle analyse</button></div>`;
   $('#new-analysis').addEventListener('click', newAnalysis);
@@ -550,6 +568,9 @@ function downloadReport(format) {
     ['poste', state.lastSummary?.player_profile?.position || ''],
     ['qualite_suivi_pourcent', state.lastResult.quality?.player_tracking_score_percent ?? ''],
     ['couverture_pourcent', state.lastResult.quality?.tracking_coverage_percent ?? ''],
+    ['temps_suivi_secondes', metrics.tracked_time_seconds?.value ?? ''],
+    ['sequences_fiables', metrics.reliable_sequences?.value ?? ''],
+    ['meilleure_sequence_secondes', metrics.longest_sequence_seconds?.value ?? ''],
     ['distance_metres', metrics.distance_meters?.available ? metrics.distance_meters.value : 'masquee'],
     ['touches_balle', metrics.ball_touches?.available ? metrics.ball_touches.value : 'masquee'],
     ['possession_secondes', metrics.possession_seconds?.available ? metrics.possession_seconds.value : 'masquee'],

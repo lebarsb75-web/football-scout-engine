@@ -45,6 +45,50 @@ def summarize_tracking_samples(
     }
 
 
+def summarize_tracked_segments(
+    samples: Iterable[bool],
+    sample_fps: float,
+    *,
+    minimum_segment_seconds: float = 1.5,
+) -> dict:
+    """Describe useful continuous sequences instead of reducing a video to one score.
+
+    Broadcast footage naturally contains replays, close-ups and camera cuts.  A report can
+    still be useful when several continuous sequences are reliable, provided those sequences
+    are reported explicitly and are not silently treated as one uninterrupted track.
+    """
+    values = [bool(value) for value in samples]
+    fps = max(0.001, float(sample_fps))
+    minimum_samples = max(1, int(round(float(minimum_segment_seconds) * fps)))
+    segments = []
+    start = None
+
+    for index, tracked in enumerate(values + [False]):
+        if tracked and start is None:
+            start = index
+        elif not tracked and start is not None:
+            length = index - start
+            if length >= minimum_samples:
+                segments.append(
+                    {
+                        "start_seconds": round(start / fps, 2),
+                        "end_seconds": round(index / fps, 2),
+                        "duration_seconds": round(length / fps, 2),
+                    }
+                )
+            start = None
+
+    tracked_samples = sum(values)
+    return {
+        "tracked_seconds": round(tracked_samples / fps, 2),
+        "reliable_segment_count": len(segments),
+        "reliable_segments": segments,
+        "longest_tracked_sequence_seconds": round(
+            max((segment["duration_seconds"] for segment in segments), default=0.0), 2
+        ),
+    }
+
+
 def classify_tracking_quality(
     *,
     player_quality: float,
@@ -52,6 +96,7 @@ def classify_tracking_quality(
     minimum_window_coverage_percent: float,
     longest_untracked_gap_seconds: float,
     scene_cuts: int,
+    unrecovered_scene_cuts: int = 0,
     reidentification_rate_percent: float,
     identity_rejection_rate_percent: float,
 ) -> tuple[str, bool]:
@@ -60,7 +105,8 @@ def classify_tracking_quality(
         coverage_percent >= 80.0
         and minimum_window_coverage_percent >= 65.0
         and longest_untracked_gap_seconds <= 5.0
-        and scene_cuts == 0
+        and unrecovered_scene_cuts == 0
+        and scene_cuts <= 12
         and reidentification_rate_percent <= 5.0
         and identity_rejection_rate_percent <= 5.0
     )

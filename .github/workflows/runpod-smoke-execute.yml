@@ -131,7 +131,7 @@ jobs:
                   f"Observed estimated cost ${estimated_cost:.4f} exceeded ceiling"
               )
           record = {
-              "test": "v2.4 26-second panoramic RunPod smoke",
+              "test": "v2.5 26-second panoramic RunPod smoke",
               "submitted_at": submitted_at,
               "endpoint_id": endpoint_id,
               "request": request_payload,

@@ -71,7 +71,7 @@ jobs:
           print(json.dumps({
               "passed": True,
               "endpoint_id": endpoint_id,
-              "engine_version": "2.4-dev",
+              "engine_version": "2.5-dev",
               "jobs": jobs,
               "workers": workers,
               "submitted_paid_job": False,

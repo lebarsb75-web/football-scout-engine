@@ -17,6 +17,17 @@ test('cost estimate matches the Python safety margin', () => {
   assert.equal(result.recommended_max_authorization_usd, 0.013);
 });
 
+test('long videos use a lower sampled-frame cost without changing the hard cap', () => {
+  const result = estimateCost(90 * 60, {
+    GPU_PRICE_PER_HOUR: '0.69',
+    BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE: '53',
+  }, 5);
+  assert.equal(result.ready, true);
+  assert.equal(result.sample_fps, 5);
+  assert.equal(result.workload_factor, 0.56);
+  assert.ok(result.recommended_max_authorization_usd < 1);
+});
+
 test('RunPod execution policy cannot outspend the approved job budget', () => {
   const env = {
     GPU_PRICE_PER_HOUR: '0.69',
@@ -75,6 +86,37 @@ test('public result fails closed when continuity verdict is missing', () => {
   });
   assert.equal(result.status, 'review_required');
   assert.equal(result.metrics.distance_meters.available, false);
+});
+
+test('public result exposes a controlled partial report for useful broadcast sequences', () => {
+  const result = publicResult({
+    status: 'completed',
+    engine_version: '2.5-dev',
+    video: { analysis_duration_seconds: 75 },
+    player: {
+      tracking_coverage_percent: 64,
+      tracked_seconds_estimated: 48,
+      reliable_segment_count: 3,
+      longest_tracked_sequence_seconds: 22.5,
+      ball_touches_estimated: 8,
+    },
+    quality: {
+      score_percent: 68,
+      player_tracking_score_percent: 71,
+      tracking_continuity_reliable: false,
+      ball_metrics_reliable: false,
+      ball_visibility_percent: 12,
+      pitch_calibration_used: false,
+      scene_cuts_detected: 2,
+      scene_cuts_recovered: 1,
+    },
+  });
+  assert.equal(result.status, 'partial');
+  assert.equal(result.metrics.tracked_time_seconds.value, 48);
+  assert.equal(result.metrics.reliable_sequences.value, 3);
+  assert.equal(result.metrics.longest_sequence_seconds.value, 22.5);
+  assert.equal(result.metrics.ball_touches.available, false);
+  assert.equal(result.quality.scene_cuts_detected, 2);
 });
 
 test('worker health reveals readiness without exposing secrets', async () => {

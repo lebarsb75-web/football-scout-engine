@@ -3,6 +3,7 @@ import unittest
 from engine_quality import (
     ball_metrics_are_reliable,
     classify_tracking_quality,
+    summarize_tracked_segments,
     summarize_tracking_samples,
 )
 
@@ -27,11 +28,36 @@ class TrackingContinuityTests(unittest.TestCase):
             minimum_window_coverage_percent=90,
             longest_untracked_gap_seconds=1,
             scene_cuts=1,
+            unrecovered_scene_cuts=1,
             reidentification_rate_percent=0,
             identity_rejection_rate_percent=0,
         )
         self.assertEqual(label, "usable_with_review")
         self.assertFalse(reliable)
+
+    def test_recovered_broadcast_cut_can_keep_good_tracking(self):
+        label, reliable = classify_tracking_quality(
+            player_quality=90,
+            coverage_percent=95,
+            minimum_window_coverage_percent=90,
+            longest_untracked_gap_seconds=1,
+            scene_cuts=2,
+            unrecovered_scene_cuts=0,
+            reidentification_rate_percent=1,
+            identity_rejection_rate_percent=1,
+        )
+        self.assertEqual(label, "good")
+        self.assertTrue(reliable)
+
+    def test_segments_keep_useful_continuous_passages(self):
+        summary = summarize_tracked_segments(
+            [True] * 20 + [False] * 5 + [True] * 5 + [False] * 2 + [True] * 30,
+            sample_fps=10,
+            minimum_segment_seconds=1.5,
+        )
+        self.assertEqual(summary["reliable_segment_count"], 2)
+        self.assertEqual(summary["tracked_seconds"], 5.5)
+        self.assertEqual(summary["longest_tracked_sequence_seconds"], 3.0)
 
     def test_high_identity_churn_cannot_be_labelled_good(self):
         label, reliable = classify_tracking_quality(
