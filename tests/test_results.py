@@ -20,6 +20,8 @@ class PublicResultTests(unittest.TestCase):
                 "tracking_continuity_reliable": True,
                 "ball_metrics_reliable": True,
                 "ball_visibility_percent": 44.0,
+                "ball_search_coverage_percent": 98.0,
+                "validated_ball_samples": 12,
                 "pitch_calibration_used": True,
             },
             "clips": [
@@ -51,13 +53,12 @@ class PublicResultTests(unittest.TestCase):
         raw["quality"]["ball_metrics_reliable"] = False
         self.assertEqual(public_result(raw)["clips"], [])
 
-    def test_low_ball_visibility_hides_ball_metrics(self):
+    def test_engine_gate_can_validate_sparse_ball_visibility(self):
         raw = self.base_result()
         raw["quality"]["ball_visibility_percent"] = 5
         result = public_result(raw)
-        self.assertFalse(result["metrics"]["ball_touches"]["available"])
-        self.assertFalse(result["metrics"]["possession_seconds"]["available"])
-        self.assertEqual(result["clips"], [])
+        self.assertTrue(result["metrics"]["ball_touches"]["available"])
+        self.assertTrue(result["metrics"]["possession_seconds"]["available"])
         self.assertTrue(result["metrics"]["distance_meters"]["available"])
 
     def test_missing_pitch_calibration_hides_distance(self):

@@ -27,7 +27,7 @@ From the current endpoint, choose **Clone Endpoint**. In Repository Configuratio
 - workers min: 0
 - workers max: 1
 
-Build the endpoint and wait until the build is `Completed` / endpoint `Ready` before sending any request. Confirm from the returned result that `engine_version` is exactly `2.5-dev`; stop on any older version.
+Build the endpoint and wait until the build is `Completed` / endpoint `Ready` before sending any request. Confirm from the returned result that `engine_version` is exactly `2.6-dev`; stop on any older version.
 
 ## First V2.4 paid request
 
@@ -61,7 +61,7 @@ Stop after the first request if any of these occurs:
 - worker fails to start;
 - model/container error;
 - video download error;
-- engine version is not `2.5-dev`;
+- engine version is not `2.6-dev`;
 - no player found around the selection point;
 - request approaches the timeout;
 - unexpected worker count > 1;

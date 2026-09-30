@@ -10,6 +10,11 @@ import requests
 import runpod
 from ultralytics import YOLO
 
+from engine_ball import (
+    calibration_points_are_valid,
+    local_ball_search_crop,
+    translate_box,
+)
 from engine_quality import (
     ball_metrics_are_reliable,
     classify_tracking_quality,
@@ -18,11 +23,16 @@ from engine_quality import (
 )
 from engine_tracking import iter_sample_frame_indices, reset_model_trackers
 
-ENGINE_VERSION = "2.5-dev"
+ENGINE_VERSION = "2.6-dev"
 MODEL_NAME = "yolo11m.pt"
 MODEL = YOLO(MODEL_NAME)
+# Keep ball inference separate from the persistent person tracker. A low-
+# confidence prediction on a magnified crop must not alter BoT-SORT state.
+BALL_MODEL = YOLO(MODEL_NAME)
 PERSON_CLASS = 0
 BALL_CLASS = 32
+LOCAL_BALL_CONFIDENCE = 0.035
+LOCAL_BALL_IMAGE_SIZE = 640
 
 
 def clamp(value, low, high):
@@ -171,6 +181,45 @@ def parse_detections(result):
     return people, balls
 
 
+def detect_local_ball_candidates(frame, player):
+    """Search a magnified area around the selected player for a tiny ball."""
+    frame_height, frame_width = frame.shape[:2]
+    crop_x1, crop_y1, crop_x2, crop_y2 = local_ball_search_crop(
+        player["box"], frame_width, frame_height
+    )
+    if crop_x2 - crop_x1 < 32 or crop_y2 - crop_y1 < 32:
+        return []
+    crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+    prediction = BALL_MODEL.predict(
+        crop,
+        classes=[BALL_CLASS],
+        conf=LOCAL_BALL_CONFIDENCE,
+        imgsz=LOCAL_BALL_IMAGE_SIZE,
+        verbose=False,
+    )[0]
+    _, local_balls = parse_detections(prediction)
+    translated = []
+    player_height = max(1.0, player["box"][3] - player["box"][1])
+    for ball in local_balls:
+        source_box = translate_box(ball["box"], crop_x1, crop_y1)
+        ball_width = source_box[2] - source_box[0]
+        ball_height = source_box[3] - source_box[1]
+        # Large detections are almost always advertising, UI or a false sports-
+        # ball match in panoramic footage.
+        if max(ball_width, ball_height) > player_height * 0.55:
+            continue
+        translated.append(
+            {
+                **ball,
+                "box": source_box,
+                "center": center(source_box),
+                "foot": foot_point(source_box),
+                "source": "local_crop",
+            }
+        )
+    return translated
+
+
 def choose_anchor_player(frame, people, target_point):
     if not people:
         return None
@@ -264,7 +313,7 @@ def make_homography(calibration):
         return None
     image_points = calibration.get("image_points")
     pitch_points = calibration.get("pitch_points_meters")
-    if not image_points or not pitch_points or len(image_points) < 4 or len(pitch_points) < 4:
+    if not calibration_points_are_valid(image_points, pitch_points):
         return None
     src = np.array(image_points, dtype=np.float32)
     dst = np.array(pitch_points, dtype=np.float32)
@@ -393,6 +442,10 @@ def analyze_video(data):
         rejected_jumps = 0
         possession_samples = 0
         ball_visible_samples = 0
+        ball_search_samples = 0
+        local_ball_searches = 0
+        local_ball_hits = 0
+        ball_confidences = []
         ball_rejections = 0
         touch_events = []
         possession_intervals = []
@@ -545,6 +598,7 @@ def analyze_video(data):
                             rejected_jumps += 1
                     previous_pitch_point = pitch_point
 
+                ball_search_samples += 1
                 ball = choose_plausible_ball(
                     balls,
                     player,
@@ -552,11 +606,24 @@ def analyze_video(data):
                     frame.shape,
                     effective_sample_fps,
                 )
+                if ball is None:
+                    local_ball_searches += 1
+                    local_balls = detect_local_ball_candidates(frame, player)
+                    ball = choose_plausible_ball(
+                        local_balls,
+                        player,
+                        previous_ball_center,
+                        frame.shape,
+                        effective_sample_fps,
+                    )
+                    if ball is not None:
+                        local_ball_hits += 1
                 if balls and ball is None:
                     ball_rejections += 1
                 close = False
                 if ball is not None:
                     ball_visible_samples += 1
+                    ball_confidences.append(float(ball["confidence"]))
                     previous_ball_center = ball["center"]
                     close = ball_close_to_player(ball, player)
 
@@ -618,6 +685,8 @@ def analyze_video(data):
         )
         coverage = tracking_summary["coverage_percent"]
         ball_visibility = ball_visible_samples / max(1, sampled_frames) * 100.0
+        ball_search_coverage = ball_search_samples / max(1, tracked_samples) * 100.0
+        mean_ball_confidence = sum(ball_confidences) / max(1, len(ball_confidences))
         mean_track_score = sum(track_scores) / max(1, len(track_scores))
         mean_appearance = sum(appearance_scores) / max(1, len(appearance_scores))
         player_quality = round(
@@ -657,6 +726,10 @@ def analyze_video(data):
             player_quality=player_quality,
             ball_visibility_percent=ball_visibility,
             sampled_frames=sampled_frames,
+            ball_search_coverage_percent=ball_search_coverage,
+            validated_ball_samples=ball_visible_samples,
+            validated_touch_events=len(touch_events),
+            mean_ball_confidence=mean_ball_confidence,
         )
         tracked_seconds = tracked_samples / effective_sample_fps
         possession_seconds = possession_samples / effective_sample_fps
@@ -726,6 +799,11 @@ def analyze_video(data):
                 "window_coverage_percent": tracking_summary["window_coverage_percent"],
                 "ball_metrics_reliable": ball_metrics_reliable,
                 "ball_visibility_percent": round(ball_visibility, 1),
+                "ball_search_coverage_percent": round(ball_search_coverage, 1),
+                "validated_ball_samples": ball_visible_samples,
+                "mean_ball_confidence": round(mean_ball_confidence, 3),
+                "local_ball_searches": local_ball_searches,
+                "local_ball_hits": local_ball_hits,
                 "ball_candidate_rejections": ball_rejections,
                 "mean_identity_appearance_similarity": round(mean_appearance, 3),
                 "reidentification_rate_percent": round(reidentification_rate, 1),
@@ -740,7 +818,8 @@ def analyze_video(data):
             # engine results (including this trace).
             "validation": {"tracking_trace": validation_trace},
             "warnings": [
-                "V2.5 analyzes forward from the player-selection frame; pre-selection footage is not included yet.",
+                "V2.6 analyzes forward from the player-selection frame; pre-selection footage is not included yet.",
+                "Tiny-ball recovery uses a dedicated magnified crop around the selected player's action area.",
                 "Broadcast cuts are handled as separate sequences; only confident post-cut identity recoveries are retained.",
                 "Touches and possession remain computer-vision estimates until validated against labelled match footage.",
                 "Broadcast-camera identity can still fail after occlusions or cuts without a dedicated re-identification model.",
@@ -750,6 +829,9 @@ def analyze_video(data):
         if homography is not None:
             result["player"]["distance_meters_estimated"] = round(distance_meters, 1)
             result["quality"]["pitch_calibration_used"] = True
+            result["quality"]["pitch_calibration_method"] = calibration.get(
+                "method", "manual_four_corner"
+            )
         else:
             result["quality"]["pitch_calibration_used"] = False
             result["warnings"].append(

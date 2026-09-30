@@ -117,6 +117,6 @@ Au moins quatre correspondances sont nécessaires. Sur une vidéo Veo / caméra 
 
 ## Statut
 
-Le moteur `2.4-dev` passe 97,3 % de couverture sur le benchmark panoramique local de 26 s, avec une pire fenêtre à 97,3 % et une absence maximale de 0,7 s. Le gate ballon échoue correctement (9,2 % de visibilité) et masque touches/possession ; la distance reste masquée sans calibration.
+Le moteur `2.6-dev` conserve les contrôles de continuité validés par le benchmark panoramique et ajoute deux traitements ciblés : une recherche agrandie du ballon autour du joueur suivi et une calibration manuelle facultative des quatre coins du terrain. Les touches et la possession exigent plusieurs observations temporelles cohérentes ; la distance métrique exige toujours une calibration valide.
 
 Ce benchmark vérifie la cohérence interne, pas l'identité exacte image par image. Les chiffres de tracking, touches, possession et distance doivent encore être mesurés contre des séquences annotées avant utilisation commerciale ou test d'un match entier.

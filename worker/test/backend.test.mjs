@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import worker, { canonicalJson, createToken, estimateCost, publicResult, runpodBudgetPolicy, verifyToken } from '../src/index.js';
+import worker, { canonicalJson, createToken, estimateCost, publicResult, runpodBudgetPolicy, validatePitchCalibration, verifyToken } from '../src/index.js';
 
 test('cost estimate stays locked without a measured benchmark', () => {
   const result = estimateCost(26, { GPU_PRICE_PER_HOUR: '0.58', BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE: '0' });
@@ -12,9 +12,9 @@ test('cost estimate stays locked without a measured benchmark', () => {
 test('cost estimate matches the Python safety margin', () => {
   const result = estimateCost(120, { GPU_PRICE_PER_HOUR: '0.58', BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE: '30' });
   assert.equal(result.ready, true);
-  assert.equal(result.estimated_gpu_seconds, 60);
-  assert.equal(result.estimated_cost_usd, 0.0097);
-  assert.equal(result.recommended_max_authorization_usd, 0.013);
+  assert.equal(result.estimated_gpu_seconds, 81);
+  assert.equal(result.estimated_cost_usd, 0.013);
+  assert.equal(result.recommended_max_authorization_usd, 0.0176);
 });
 
 test('long videos use a lower sampled-frame cost without changing the hard cap', () => {
@@ -51,6 +51,48 @@ test('signed upload tokens enforce scope and expiry', async () => {
 
 test('canonical JSON is stable across object key order', () => {
   assert.equal(canonicalJson({ b: 2, a: { y: 3, x: 1 } }), canonicalJson({ a: { x: 1, y: 3 }, b: 2 }));
+});
+
+test('manual pitch calibration accepts four ordered corners only', () => {
+  const calibration = validatePitchCalibration({
+    static_camera: true,
+    image_points: [[100, 100], [1800, 100], [1700, 900], [200, 900]],
+    pitch_points_meters: [[0, 0], [105, 0], [105, 68], [0, 68]],
+  });
+  assert.equal(calibration.method, 'manual_four_corner');
+  assert.throws(() => validatePitchCalibration({
+    static_camera: true,
+    image_points: [[100, 100]],
+    pitch_points_meters: [[0, 0]],
+  }), /quatre coins/);
+});
+
+test('public result accepts sparse ball presence after the engine evidence gate', () => {
+  const result = publicResult({
+    status: 'completed',
+    video: { analysis_duration_seconds: 20 },
+    player: {
+      tracking_coverage_percent: 99,
+      tracked_seconds_estimated: 19.8,
+      reliable_segment_count: 1,
+      longest_tracked_sequence_seconds: 19.8,
+      ball_touches_estimated: 2,
+      possession_seconds_estimated: 1.2,
+    },
+    quality: {
+      score_percent: 90,
+      player_tracking_score_percent: 95,
+      tracking_continuity_reliable: true,
+      ball_metrics_reliable: true,
+      ball_visibility_percent: 2,
+      ball_search_coverage_percent: 99,
+      validated_ball_samples: 4,
+      pitch_calibration_used: false,
+    },
+  });
+  assert.equal(result.metrics.ball_touches.value, 2);
+  assert.equal(result.metrics.possession_seconds.value, 1.2);
+  assert.equal(result.quality.ball_search_coverage_percent, 99);
 });
 
 test('public result exposes good tracking but hides unvalidated ball and distance metrics', () => {

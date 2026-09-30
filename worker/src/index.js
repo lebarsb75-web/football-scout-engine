@@ -134,6 +134,7 @@ export function estimateCost(durationSeconds, env, sampleFps = 10) {
   const duration = positiveNumber(durationSeconds);
   const price = positiveNumber(env.GPU_PRICE_PER_HOUR, 0.58);
   const benchmark = positiveNumber(env.BENCHMARK_GPU_SECONDS_PER_VIDEO_MINUTE);
+  const pipelineFactor = positiveNumber(env.VISION_PIPELINE_FACTOR, 1.35);
   const normalizedSampleFps = Math.min(10, Math.max(1, number(sampleFps, 10)));
   if (!duration) throw new Error('video_duration_seconds must be > 0');
   if (!benchmark) {
@@ -144,7 +145,7 @@ export function estimateCost(durationSeconds, env, sampleFps = 10) {
     };
   }
   const workloadFactor = 0.12 + 0.88 * (normalizedSampleFps / 10);
-  const estimatedGpuSeconds = duration / 60 * benchmark * workloadFactor;
+  const estimatedGpuSeconds = duration / 60 * benchmark * workloadFactor * pipelineFactor;
   const estimatedCost = estimatedGpuSeconds / 3600 * price;
   return {
     ready: true,
@@ -152,6 +153,7 @@ export function estimateCost(durationSeconds, env, sampleFps = 10) {
     benchmark_gpu_seconds_per_video_minute: Number(benchmark.toFixed(3)),
     sample_fps: normalizedSampleFps,
     workload_factor: Number(workloadFactor.toFixed(3)),
+    vision_pipeline_factor: Number(pipelineFactor.toFixed(3)),
     estimated_gpu_seconds: Number(estimatedGpuSeconds.toFixed(1)),
     estimated_cost_usd: Number(estimatedCost.toFixed(4)),
     recommended_max_authorization_usd: Number((estimatedCost * 1.35).toFixed(4)),
@@ -196,7 +198,10 @@ export function publicResult(engineResult) {
   const longestSequence = number(player.longest_tracked_sequence_seconds);
   const analyzedDuration = number(engineResult.video?.analysis_duration_seconds);
   const usefulPartialTracking = tracking >= 20 && trackedSeconds >= 3 && reliableSegments >= 1;
-  const ballOk = trackingOk && quality.ball_metrics_reliable === true && ballVisibility >= 40;
+  // V2.6 delegates the evidence gate to the inference engine. Requiring ball
+  // visibility on 40% of an entire match wrongly rejects defenders and other
+  // players who are rarely near the ball.
+  const ballOk = trackingOk && quality.ball_metrics_reliable === true;
   const distanceAvailable = trackingOk && calibrationUsed && 'distance_meters_estimated' in player;
   const touchesAvailable = ballOk && 'ball_touches_estimated' in player;
   const possessionAvailable = ballOk && 'possession_seconds_estimated' in player;
@@ -219,10 +224,13 @@ export function publicResult(engineResult) {
       player_tracking_score_percent: Number(playerQuality.toFixed(1)),
       tracking_coverage_percent: Number(tracking.toFixed(1)),
       ball_visibility_percent: Number(ballVisibility.toFixed(1)),
+      ball_search_coverage_percent: Number(number(quality.ball_search_coverage_percent).toFixed(1)),
+      validated_ball_samples: Math.max(0, Math.trunc(number(quality.validated_ball_samples))),
       tracking_continuity_reliable: continuityOk,
       tracking_pass: trackingOk,
       ball_metrics_pass: ballOk,
       pitch_calibration_used: calibrationUsed,
+      pitch_calibration_method: calibrationUsed ? String(quality.pitch_calibration_method || 'manual_four_corner') : null,
       scene_cuts_detected: Math.max(0, Math.trunc(number(quality.scene_cuts_detected))),
       scene_cuts_recovered: Math.max(0, Math.trunc(number(quality.scene_cuts_recovered))),
     },
@@ -274,6 +282,31 @@ function validatePlayerProfile(value) {
     position,
     team: value.team ? String(value.team).trim().slice(0, 80) : null,
     shirt_number: shirtNumber,
+  };
+}
+
+export function validatePitchCalibration(value) {
+  if (value == null) return null;
+  if (!value || typeof value !== 'object' || value.static_camera !== true) {
+    throw new Error('La calibration terrain est invalide.');
+  }
+  const imagePoints = value.image_points;
+  const pitchPoints = value.pitch_points_meters;
+  const validPoints = (points, maximum) => Array.isArray(points)
+    && points.length === 4
+    && points.every((point) => Array.isArray(point)
+      && point.length === 2
+      && point.every((coordinate) => Number.isFinite(Number(coordinate))
+        && Number(coordinate) >= 0
+        && Number(coordinate) <= maximum));
+  if (!validPoints(imagePoints, 20000) || !validPoints(pitchPoints, 200)) {
+    throw new Error('La calibration doit contenir exactement quatre coins valides.');
+  }
+  return {
+    static_camera: true,
+    image_points: imagePoints.map((point) => point.map(Number)),
+    pitch_points_meters: pitchPoints.map((point) => point.map(Number)),
+    method: 'manual_four_corner',
   };
 }
 
@@ -468,6 +501,7 @@ async function submitAnalysis(request, env) {
   const providerPolicy = runpodBudgetPolicy(approved, env);
   const playerProfile = validatePlayerProfile(body.player_profile);
   const matchContext = validateMatchContext(body.match_context);
+  const pitchCalibration = validatePitchCalibration(body.pitch_calibration);
   const normalized = {
     video_url: videoUrl.toString(), duration, target_time_seconds: targetTime,
     target: { x: Number(target.x), y: Number(target.y) },
@@ -477,6 +511,7 @@ async function submitAnalysis(request, env) {
     approved_max_cost_usd: approved,
     player_profile: playerProfile,
     match_context: matchContext,
+    pitch_calibration: pitchCalibration,
   };
   const payloadFingerprint = await fingerprint(normalized);
   const existing = await env.DB.prepare('SELECT fingerprint, state, response_json FROM idempotency WHERE idempotency_key = ?').bind(idempotencyKey).first();
@@ -500,6 +535,7 @@ async function submitAnalysis(request, env) {
         sample_fps: normalized.sample_fps,
         confidence: normalized.confidence,
         image_size: normalized.image_size,
+        pitch_calibration: normalized.pitch_calibration,
       },
       policy: providerPolicy,
     }),
@@ -515,8 +551,9 @@ async function submitAnalysis(request, env) {
     target_time_seconds: targetTime,
     sample_fps: normalized.sample_fps,
     image_size: normalized.image_size,
-    player_profile: playerProfile,
-    match_context: matchContext,
+      player_profile: playerProfile,
+      match_context: matchContext,
+      pitch_calibration: pitchCalibration ? { provided: true, method: pitchCalibration.method } : null,
   };
   const response = {
     submitted: true,

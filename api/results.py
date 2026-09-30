@@ -4,7 +4,6 @@ from typing import Any
 
 MIN_TRACKING_COVERAGE = 80.0
 MIN_PLAYER_TRACKING_QUALITY = 82.0
-MIN_BALL_VISIBILITY = 40.0
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -46,11 +45,7 @@ def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
         and player_quality >= MIN_PLAYER_TRACKING_QUALITY
         and continuity_ok
     )
-    ball_ok = (
-        tracking_ok
-        and quality.get("ball_metrics_reliable") is True
-        and ball_visibility >= MIN_BALL_VISIBILITY
-    )
+    ball_ok = tracking_ok and quality.get("ball_metrics_reliable") is True
 
     metrics: dict[str, Any] = {
         "tracking_coverage_percent": {
@@ -118,10 +113,19 @@ def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
             "player_tracking_score_percent": round(player_quality, 1),
             "tracking_coverage_percent": round(tracking, 1),
             "ball_visibility_percent": round(ball_visibility, 1),
+            "ball_search_coverage_percent": round(
+                _number(quality.get("ball_search_coverage_percent")), 1
+            ),
+            "validated_ball_samples": int(
+                _number(quality.get("validated_ball_samples"))
+            ),
             "tracking_continuity_reliable": continuity_ok,
             "tracking_pass": tracking_ok,
             "ball_metrics_pass": ball_ok,
             "pitch_calibration_used": calibration_used,
+            "pitch_calibration_method": (
+                quality.get("pitch_calibration_method") if calibration_used else None
+            ),
         },
         "metrics": metrics,
         "clips": public_clips,

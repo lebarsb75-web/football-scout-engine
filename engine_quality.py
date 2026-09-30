@@ -130,10 +130,26 @@ def ball_metrics_are_reliable(
     player_quality: float,
     ball_visibility_percent: float,
     sampled_frames: int,
+    ball_search_coverage_percent: float = 0.0,
+    validated_ball_samples: int = 0,
+    validated_touch_events: int = 0,
+    mean_ball_confidence: float = 0.0,
 ) -> bool:
+    """Gate touch metrics on search coverage and temporal evidence.
+
+    Ball visibility cannot reasonably be required on 40% of a match: an
+    individual player, especially a centre-back, is not near the ball for that
+    share of frames.  V2.6 instead requires that the dedicated detector was run
+    across nearly all reliable player frames and that a candidate survived
+    proximity and temporal-continuity checks.  The old visibility argument is
+    retained for backwards-compatible callers and diagnostics.
+    """
     return bool(
         tracking_continuity_reliable
         and player_quality >= 82.0
-        and ball_visibility_percent >= 40.0
         and sampled_frames >= 30
+        and ball_search_coverage_percent >= 80.0
+        and validated_ball_samples >= 3
+        and validated_touch_events >= 1
+        and mean_ball_confidence >= 0.04
     )

@@ -64,7 +64,7 @@ class RunPodSmokeQualityTests(unittest.TestCase):
     def result(self):
         return {
             "status": "completed",
-            "engine_version": "2.5-dev",
+            "engine_version": "2.6-dev",
             "processing_seconds": 8.2,
             "video": {
                 "analysis_duration_seconds": 26.0,

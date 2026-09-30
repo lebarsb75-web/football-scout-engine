@@ -11,6 +11,8 @@ const state = {
   lastResult: null,
   lastSummary: null,
   uploadController: null,
+  calibrationMode: false,
+  calibrationPoints: [],
 };
 
 const panels = {
@@ -106,7 +108,42 @@ function resetSelection() {
   $('#clear-selection').disabled = true;
   $('#confirm-player').disabled = true;
   $('#selection-status').textContent = 'Clique sur le joueur pour continuer.';
+  $('#video-hint').textContent = '① Mets en pause · ② Clique sur ton joueur';
   $('#video-hint').classList.remove('hidden');
+  resetCalibration();
+}
+
+function resetCalibration() {
+  state.calibrationMode = false;
+  state.calibrationPoints = [];
+  $$('.calibration-marker').forEach((item) => item.remove());
+  const controls = $('.calibration-controls');
+  if (controls) controls.classList.remove('active');
+  const status = $('#calibration-status');
+  if (status) status.textContent = 'Calibre les quatre coins si la caméra reste fixe.';
+  const button = $('#toggle-calibration');
+  if (button) button.textContent = 'Calibrer le terrain';
+}
+
+function clickOnRenderedVideo(event) {
+  const rect = video.getBoundingClientRect();
+  const videoRatio = video.videoWidth / video.videoHeight;
+  const elementRatio = rect.width / rect.height;
+  let width = rect.width;
+  let height = rect.height;
+  let offsetX = 0;
+  let offsetY = 0;
+  if (elementRatio > videoRatio) {
+    width = rect.height * videoRatio;
+    offsetX = (rect.width - width) / 2;
+  } else {
+    height = rect.width / videoRatio;
+    offsetY = (rect.height - height) / 2;
+  }
+  const x = event.clientX - rect.left - offsetX;
+  const y = event.clientY - rect.top - offsetY;
+  if (x < 0 || y < 0 || x > width || y > height) return null;
+  return { x: x / width, y: y / height, displayX: offsetX + x, displayY: offsetY + y };
 }
 
 function loadVideo(file) {
@@ -147,27 +184,31 @@ video.addEventListener('loadedmetadata', () => {
 
 $('#video-stage').addEventListener('click', (event) => {
   if (!state.file || video.readyState < 2) return;
-  const rect = video.getBoundingClientRect();
-  const videoRatio = video.videoWidth / video.videoHeight;
-  const elementRatio = rect.width / rect.height;
-  let width = rect.width;
-  let height = rect.height;
-  let offsetX = 0;
-  let offsetY = 0;
-  if (elementRatio > videoRatio) {
-    width = rect.height * videoRatio;
-    offsetX = (rect.width - width) / 2;
-  } else {
-    height = rect.width / videoRatio;
-    offsetY = (rect.height - height) / 2;
-  }
-  const x = event.clientX - rect.left - offsetX;
-  const y = event.clientY - rect.top - offsetY;
-  if (x < 0 || y < 0 || x > width || y > height) return;
+  const point = clickOnRenderedVideo(event);
+  if (!point) return;
   video.pause();
-  state.target = { x: x / width, y: y / height, time: video.currentTime };
-  marker.style.left = `${offsetX + x}px`;
-  marker.style.top = `${offsetY + y}px`;
+  if (state.calibrationMode) {
+    state.calibrationPoints.push({ x: point.x, y: point.y });
+    const calibrationMarker = document.createElement('span');
+    calibrationMarker.className = 'calibration-marker';
+    calibrationMarker.textContent = String(state.calibrationPoints.length);
+    calibrationMarker.style.left = `${point.displayX}px`;
+    calibrationMarker.style.top = `${point.displayY}px`;
+    $('#video-stage').append(calibrationMarker);
+    if (state.calibrationPoints.length === 4) {
+      state.calibrationMode = false;
+      $('.calibration-controls').classList.remove('active');
+      $('#calibration-status').textContent = '✓ Terrain calibré : la distance pourra être estimée.';
+      $('#toggle-calibration').textContent = 'Recommencer la calibration';
+      $('#video-hint').textContent = state.target ? '✓ Joueur et terrain prêts' : 'Clique maintenant sur le joueur';
+    } else {
+      $('#calibration-status').textContent = `Coin ${state.calibrationPoints.length}/4 enregistré.`;
+    }
+    return;
+  }
+  state.target = { x: point.x, y: point.y, time: video.currentTime };
+  marker.style.left = `${point.displayX}px`;
+  marker.style.top = `${point.displayY}px`;
   marker.classList.remove('hidden');
   $('#video-hint').classList.add('hidden');
   $('#selected-time').textContent = formatTime(state.target.time);
@@ -178,6 +219,23 @@ $('#video-stage').addEventListener('click', (event) => {
   $('#summary-file').textContent = state.file.name;
   $('#summary-duration').textContent = formatTime(video.duration);
   $('#summary-time').textContent = formatTime(state.target.time);
+});
+
+$('#toggle-calibration').addEventListener('click', () => {
+  if (!state.file || video.readyState < 2) return showToast('Charge d’abord une vidéo.');
+  if (state.calibrationMode) {
+    resetCalibration();
+    $('#video-hint').textContent = state.target ? '✓ Joueur sélectionné' : '① Mets en pause · ② Clique sur ton joueur';
+    return;
+  }
+  resetCalibration();
+  state.calibrationMode = true;
+  $('.calibration-controls').classList.add('active');
+  $('#toggle-calibration').textContent = 'Annuler la calibration';
+  $('#calibration-status').textContent = 'Clique dans l’ordre : haut gauche, haut droite, bas droite, bas gauche.';
+  $('#video-hint').textContent = 'Terrain : haut gauche → haut droite → bas droite → bas gauche';
+  $('#video-hint').classList.remove('hidden');
+  video.pause();
 });
 
 $('#confirm-player').addEventListener('click', () => {
@@ -395,6 +453,15 @@ $('#start-analysis').addEventListener('click', async () => {
       confidence: 0.15,
       image_size: 960,
       approved_max_cost_usd: max,
+      pitch_calibration: state.calibrationPoints.length === 4 ? {
+        static_camera: true,
+        image_points: state.calibrationPoints.map((point) => [
+          point.x * video.videoWidth,
+          point.y * video.videoHeight,
+        ]),
+        pitch_points_meters: [[0, 0], [105, 0], [105, 68], [0, 68]],
+        method: 'manual_four_corner',
+      } : null,
       ...identity,
     };
     const submitted = await api('/analysis/submit', {
@@ -460,7 +527,13 @@ async function pollJob() {
 
 function metricCard(title, metric, formatter, reason) {
   if (!metric?.available) {
-    return `<article class="metric-card locked"><span>${title}</span><strong>Masquée</strong><small>🔒 ${reason}</small></article>`;
+    const reasons = {
+      pitch_calibration_required: 'Calibre les 4 coins du terrain avant l’analyse',
+      tracking_quality_too_low: 'Continuité du suivi insuffisante',
+      ball_or_tracking_quality_too_low: 'Preuves ballon insuffisantes',
+    };
+    const detail = reasons[metric?.reason] || reason;
+    return `<article class="metric-card locked"><span>${title}</span><strong>Masquée</strong><small>🔒 ${detail}</small></article>`;
   }
   return `<article class="metric-card"><span>${title}</span><strong>${formatter(metric.value)}</strong><small>✓ Contrôle de fiabilité passé</small></article>`;
 }
@@ -517,11 +590,12 @@ function renderResult(result, rawSummary = {}, job = state.activeJob) {
     .join(' · ');
   const trackingScore = Number(quality.player_tracking_score_percent || 0);
   const coverage = Number(quality.tracking_coverage_percent || 0);
+  const ballSearchCoverage = Number(quality.ball_search_coverage_percent || 0);
   const partial = result.status === 'partial';
   const badge = partial ? 'Rapport partiel contrôlé' : 'Suivi validé';
   const explanation = partial
     ? 'La vidéo a été analysée par séquences. Les passages fiables restent visibles, sans transformer les changements de caméra ou les pertes de suivi en statistiques certaines.'
-    : 'La distance exige une calibration valide. Les touches et la possession exigent un suivi fiable du ballon.';
+    : `La distance exige une calibration valide. Le détecteur dédié a recherché le ballon sur ${ballSearchCoverage.toFixed(1)} % des images suivies ; touches et possession ne sont affichées qu’avec plusieurs observations cohérentes.`;
   $('#result-content').innerHTML = `
     <div class="result-head"><div><p class="eyebrow">RAPPORT JOUEUR</p><h1>${playerName}</h1><p>${context || 'Analyse individuelle terminée.'}</p></div><span class="quality-pill">${partial ? '◐' : '✓'} ${badge}</span></div>
     <div class="result-summary"><div class="quality-score"><span>Qualité du suivi</span><strong>${trackingScore.toFixed(0)}<small>%</small></strong><p>Couverture : ${coverage.toFixed(1)} %</p><small class="engine-label">Moteur ${escapeHtml(result.engine_version || '—')}</small></div><div class="metrics-grid">${diagnosticCard('Temps réellement suivi', metrics.tracked_time_seconds, (value) => formatTime(value), 'Mesuré sur les images retenues')}${diagnosticCard('Séquences fiables', metrics.reliable_sequences, (value) => String(value), 'Passages continus du joueur')}${diagnosticCard('Meilleure séquence', metrics.longest_sequence_seconds, (value) => formatTime(value), 'Plus longue continuité détectée')}${metricCard('Distance parcourue', metrics.distance_meters, (value) => `${(value / 1000).toFixed(2).replace('.', ',')} km`, 'Calibration terrain requise')}${metricCard('Touches de balle', metrics.ball_touches, (value) => String(value), 'Visibilité ballon insuffisante')}${metricCard('Temps de possession', metrics.possession_seconds, (value) => formatTime(value), 'Contrôle ballon non atteint')}</div></div>

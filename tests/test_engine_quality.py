@@ -79,6 +79,38 @@ class TrackingContinuityTests(unittest.TestCase):
                 player_quality=95,
                 ball_visibility_percent=90,
                 sampled_frames=100,
+                ball_search_coverage_percent=100,
+                validated_ball_samples=20,
+                validated_touch_events=2,
+                mean_ball_confidence=0.8,
+            )
+        )
+
+    def test_ball_gate_uses_search_coverage_not_impossible_match_visibility(self):
+        self.assertTrue(
+            ball_metrics_are_reliable(
+                tracking_continuity_reliable=True,
+                player_quality=95,
+                ball_visibility_percent=2,
+                sampled_frames=100,
+                ball_search_coverage_percent=98,
+                validated_ball_samples=4,
+                validated_touch_events=1,
+                mean_ball_confidence=0.2,
+            )
+        )
+
+    def test_ball_gate_rejects_isolated_low_confidence_false_positive(self):
+        self.assertFalse(
+            ball_metrics_are_reliable(
+                tracking_continuity_reliable=True,
+                player_quality=95,
+                ball_visibility_percent=2,
+                sampled_frames=100,
+                ball_search_coverage_percent=98,
+                validated_ball_samples=1,
+                validated_touch_events=1,
+                mean_ball_confidence=0.03,
             )
         )
 
