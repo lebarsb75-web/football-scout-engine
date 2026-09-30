@@ -60,6 +60,8 @@ function formatDate(value, includeTime = false) {
   }).format(date);
 }
 
+// V2.6 frontend deployment marker.
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
