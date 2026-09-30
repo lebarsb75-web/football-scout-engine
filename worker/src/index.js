@@ -59,6 +59,8 @@ function base64UrlDecode(value) {
   const padded = value.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - value.length % 4) % 4);
   const binary = atob(padded);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+
+// V2.6 backend deployment marker.
 }
 
 async function hmac(value, secret) {
@@ -123,7 +125,8 @@ async function storedVideoBytes(bucket) {
   let total = 0;
   let cursor;
   do {
-    const page = await bucket.list({ prefix: 'uploads/', limit: 500, cursor });
+
+    // V2.6 backend deployment marker.const page = await bucket.list({ prefix: 'uploads/', limit: 500, cursor });
     total += page.objects.reduce((sum, object) => sum + number(object.size), 0);
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
