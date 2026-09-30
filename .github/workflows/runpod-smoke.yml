@@ -1,4 +1,4 @@
-# Manual zero-cost preflight 2026-09-30
+# Zero-cost RunPod capacity diagnostic 2026-09-30
 name: runpod-smoke-preflight
 
 on:
@@ -46,10 +46,38 @@ jobs:
           endpoint_id = "47kdwxukrvp695"
           load_exact_payload(Path("benchmarks/test-02-gameplay.json"))
           verify_local_engine_version(Path("handler.py"))
+          headers = {"Authorization": f"Bearer {os.environ['RUNPOD_API_KEY']}"}
+
+          control = requests.get(
+              f"https://api.runpod.io/v2/serverless/{endpoint_id}",
+              headers=headers,
+              timeout=45,
+          )
+          control.raise_for_status()
+          endpoint = control.json()
+          gpu = endpoint.get("gpu") or {}
+          scaling = endpoint.get("workers") or {}
+          print(json.dumps({
+              "endpoint_config": {
+                  "id": endpoint.get("id"),
+                  "name": endpoint.get("name"),
+                  "type": endpoint.get("type"),
+                  "gpu": {"count": gpu.get("count"), "pools": gpu.get("pools")},
+                  "workers": {
+                      "min": scaling.get("min"),
+                      "max": scaling.get("max"),
+                      "idleTimeout": scaling.get("idleTimeout"),
+                  },
+                  "timeout": endpoint.get("timeout"),
+                  "dataCenterIds": endpoint.get("dataCenterIds"),
+                  "locations": endpoint.get("locations"),
+                  "networkVolumeId": endpoint.get("networkVolumeId"),
+              }
+          }, indent=2, sort_keys=True), flush=True)
 
           response = requests.get(
               f"https://api.runpod.ai/v2/{endpoint_id}/health",
-              headers={"Authorization": f"Bearer {os.environ['RUNPOD_API_KEY']}"},
+              headers=headers,
               timeout=45,
           )
           response.raise_for_status()
@@ -68,8 +96,6 @@ jobs:
               "running", "initializing", "throttled", "unhealthy"
           )):
               raise SystemExit(f"Endpoint has an unsafe worker state: {workers}")
-          # RunPod exposes one available worker in both `idle` and `ready`.
-          # These counters overlap, so count availability once.
           available_workers = max(
               int(workers.get("idle", 0)),
               int(workers.get("ready", 0)),
@@ -79,7 +105,7 @@ jobs:
           print(json.dumps({
               "passed": True,
               "endpoint_id": endpoint_id,
-              "engine_version": "2.5-dev",
+              "engine_version": "2.6-dev",
               "jobs": jobs,
               "workers": workers,
               "submitted_paid_job": False,
