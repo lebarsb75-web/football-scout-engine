@@ -1,3 +1,4 @@
+# Manual zero-cost preflight 2026-09-30
 name: runpod-smoke-preflight
 
 on:
