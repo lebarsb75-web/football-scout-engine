@@ -28,6 +28,7 @@ def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
         }
 
     player = engine_result.get("player") or {}
+    actions = player.get("actions") or {}
     quality = engine_result.get("quality") or {}
     tracking = _number(player.get("tracking_coverage_percent"))
     ball_visibility = _number(quality.get("ball_visibility_percent"))
@@ -46,6 +47,20 @@ def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
         and continuity_ok
     )
     ball_ok = tracking_ok and quality.get("ball_metrics_reliable") is True
+    action_ok = tracking_ok and quality.get("action_metrics_reliable") is True
+    has_action_data = isinstance(actions.get("passes"), dict) and isinstance(
+        actions.get("heatmap"), dict
+    )
+
+    def action_metric(value):
+        if not tracking_ok or not has_action_data or value is None:
+            return {"available": False, "reason": "ball_or_team_evidence_too_low"}
+        return {
+            "available": True,
+            "value": value,
+            "confidence": "estimated" if action_ok else "review_required",
+            "review_required": not action_ok,
+        }
 
     metrics: dict[str, Any] = {
         "tracking_coverage_percent": {
@@ -90,6 +105,44 @@ def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
     else:
         metrics["possession_seconds"]["reason"] = "ball_or_tracking_quality_too_low"
 
+    passes = actions.get("passes") or {}
+    duels = actions.get("duels") or {}
+    action_values = {
+        "passes_attempted": int(_number(passes.get("attempted"))),
+        "passes_completed": int(_number(passes.get("completed"))),
+        "passes_failed": int(_number(passes.get("failed"))),
+        "pass_completion_percent": round(_number(passes.get("completion_percent")), 1),
+        "progressive_passes": int(_number(passes.get("progressive"))),
+        "build_up_passes": int(_number(passes.get("build_up"))),
+        "interceptions": int(_number(actions.get("interceptions"))),
+        "recoveries": int(_number(actions.get("recoveries"))),
+        "duels_won": int(_number(duels.get("won"))),
+        "duels_lost": int(_number(duels.get("lost"))),
+        "aerial_duels_won": int(_number(duels.get("aerial_won"))),
+        "aerial_duels_lost": int(_number(duels.get("aerial_lost"))),
+        "tackles": int(_number(actions.get("tackles"))),
+        "clearances": int(_number(actions.get("clearances"))),
+        "blocks": int(_number(actions.get("blocks"))),
+        "turnovers": int(_number(actions.get("turnovers"))),
+        "defensive_error_candidates": int(
+            _number(actions.get("defensive_error_candidates"))
+        ),
+        "average_position": actions.get("average_position"),
+        "heatmap": actions.get("heatmap"),
+        "qualitative": actions.get("qualitative"),
+    }
+    metrics.update({key: action_metric(value) for key, value in action_values.items()})
+    metrics["max_speed_kmh"] = (
+        action_metric(round(_number(actions.get("max_speed_kmh")), 1))
+        if calibration_used and actions.get("max_speed_kmh") is not None
+        else {
+            "available": False,
+            "reason": "pitch_calibration_required"
+            if not calibration_used
+            else "tracking_quality_too_low",
+        }
+    )
+
     public_clips = []
     if ball_ok:
         raw_clips = engine_result.get("clips")
@@ -122,12 +175,23 @@ def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
             "tracking_continuity_reliable": continuity_ok,
             "tracking_pass": tracking_ok,
             "ball_metrics_pass": ball_ok,
+            "action_metrics_pass": action_ok,
+            "action_metrics_review_required": bool(has_action_data and not action_ok),
+            "ball_tracking_coverage_percent": round(
+                _number(quality.get("ball_tracking_coverage_percent")), 1
+            ),
+            "team_classification_confidence_percent": round(
+                _number(quality.get("team_classification_confidence_percent")), 1
+            ),
             "pitch_calibration_used": calibration_used,
             "pitch_calibration_method": (
                 quality.get("pitch_calibration_method") if calibration_used else None
             ),
         },
         "metrics": metrics,
+        "action_events": deepcopy(actions.get("events") or [])[:500]
+        if has_action_data
+        else [],
         "clips": public_clips,
         "notice": "Computer-vision statistics are estimates and are exposed only when quality gates pass.",
     }

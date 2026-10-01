@@ -15,6 +15,7 @@ from engine_ball import (
     local_ball_search_crop,
     translate_box,
 )
+from engine_actions import ActionAccumulator
 from engine_quality import (
     ball_metrics_are_reliable,
     classify_tracking_quality,
@@ -23,7 +24,7 @@ from engine_quality import (
 )
 from engine_tracking import iter_sample_frame_indices, reset_model_trackers
 
-ENGINE_VERSION = "2.6-dev"
+ENGINE_VERSION = "2.7-dev"
 MODEL_NAME = "yolo11m.pt"
 MODEL = YOLO(MODEL_NAME)
 # Keep ball inference separate from the persistent person tracker. A low-
@@ -33,6 +34,9 @@ PERSON_CLASS = 0
 BALL_CLASS = 32
 LOCAL_BALL_CONFIDENCE = 0.035
 LOCAL_BALL_IMAGE_SIZE = 640
+GLOBAL_BALL_CONFIDENCE = 0.025
+GLOBAL_BALL_IMAGE_SIZE = 1280
+GLOBAL_BALL_DETECTION_FPS = 1.5
 
 
 def clamp(value, low, high):
@@ -218,6 +222,95 @@ def detect_local_ball_candidates(frame, player):
             }
         )
     return translated
+
+
+def detect_global_ball_candidates(frame, player_height):
+    """Run a dedicated low-confidence full-frame football search.
+
+    The normal person tracker uses a higher confidence threshold. Keeping this
+    inference separate recovers tiny balls without polluting person identities.
+    """
+
+    prediction = BALL_MODEL.predict(
+        frame,
+        classes=[BALL_CLASS],
+        conf=GLOBAL_BALL_CONFIDENCE,
+        imgsz=GLOBAL_BALL_IMAGE_SIZE,
+        verbose=False,
+    )[0]
+    _, candidates = parse_detections(prediction)
+    plausible = []
+    for ball in candidates:
+        ball_width = ball["box"][2] - ball["box"][0]
+        ball_height = ball["box"][3] - ball["box"][1]
+        if max(ball_width, ball_height) <= max(8.0, player_height * 0.42):
+            plausible.append({**ball, "source": "global_ball_model"})
+    return plausible
+
+
+def track_ball_optical_flow(previous_gray, current_gray, previous_center, frame_shape):
+    """Bridge short gaps between neural detections with pyramidal optical flow."""
+
+    if previous_gray is None or current_gray is None or previous_center is None:
+        return None
+    source = np.array([[previous_center]], dtype=np.float32)
+    target, status, error = cv2.calcOpticalFlowPyrLK(
+        previous_gray,
+        current_gray,
+        source,
+        None,
+        winSize=(19, 19),
+        maxLevel=3,
+        criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.02),
+    )
+    if target is None or status is None or int(status[0][0]) != 1:
+        return None
+    if error is not None and float(error[0][0]) > 24.0:
+        return None
+    point = (float(target[0][0][0]), float(target[0][0][1]))
+    height, width = frame_shape[:2]
+    if not (0 <= point[0] < width and 0 <= point[1] < height):
+        return None
+    if euclidean(point, previous_center) > 0.055 * math.hypot(width, height):
+        return None
+    radius = max(2.0, min(width, height) * 0.003)
+    box = [point[0] - radius, point[1] - radius, point[0] + radius, point[1] + radius]
+    return {
+        "box": box,
+        "center": point,
+        "foot": point,
+        "id": None,
+        "confidence": 0.05,
+        "source": "optical_flow",
+    }
+
+
+def annotate_team_roles(frame, people, player, reference_signature):
+    """Label nearby tracks by shirt appearance relative to the selected player."""
+
+    annotated = []
+    for person in people:
+        item = dict(person)
+        if person is player:
+            item.update(role="target", team="teammate", team_confident=True, team_similarity=1.0)
+        else:
+            similarity = appearance_similarity(
+                reference_signature, appearance_signature(frame, person["box"])
+            )
+            if similarity >= 0.47:
+                team = "teammate"
+            elif similarity <= 0.34:
+                team = "opponent"
+            else:
+                team = "unknown"
+            item.update(
+                role="other",
+                team=team,
+                team_similarity=round(similarity, 3),
+                team_confident=similarity >= 0.55 or similarity <= 0.24,
+            )
+        annotated.append(item)
+    return annotated
 
 
 def choose_anchor_player(frame, people, target_point):
@@ -445,6 +538,10 @@ def analyze_video(data):
         ball_search_samples = 0
         local_ball_searches = 0
         local_ball_hits = 0
+        global_ball_searches = 0
+        global_ball_hits = 0
+        optical_flow_ball_samples = 0
+        detected_ball_samples = 0
         ball_confidences = []
         ball_rejections = 0
         touch_events = []
@@ -457,6 +554,9 @@ def analyze_video(data):
         appearance_scores = []
         tracking_samples = []
         validation_trace = []
+        action_analyzer = ActionAccumulator(effective_sample_fps, width, height)
+        previous_gray = None
+        ball_flow_streak = 0
         frame_index = target_frame_index
         first_sample = True
 
@@ -485,6 +585,8 @@ def analyze_video(data):
                 previous_box_height = None
                 previous_pitch_point = None
                 previous_ball_center = None
+                previous_gray = None
+                ball_flow_streak = 0
                 close_streak = 0
                 far_streak = 0
                 reset_model_trackers(MODEL)
@@ -606,6 +708,24 @@ def analyze_video(data):
                     frame.shape,
                     effective_sample_fps,
                 )
+                current_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                global_cadence = max(
+                    1, int(round(effective_sample_fps / GLOBAL_BALL_DETECTION_FPS))
+                )
+                if ball is None and sampled_frames % global_cadence == 0:
+                    global_ball_searches += 1
+                    global_balls = detect_global_ball_candidates(
+                        frame, max(1.0, player["box"][3] - player["box"][1])
+                    )
+                    ball = choose_plausible_ball(
+                        global_balls,
+                        player,
+                        previous_ball_center,
+                        frame.shape,
+                        effective_sample_fps,
+                    )
+                    if ball is not None:
+                        global_ball_hits += 1
                 if ball is None:
                     local_ball_searches += 1
                     local_balls = detect_local_ball_candidates(frame, player)
@@ -618,6 +738,19 @@ def analyze_video(data):
                     )
                     if ball is not None:
                         local_ball_hits += 1
+                if ball is None and ball_flow_streak < 3:
+                    ball = track_ball_optical_flow(
+                        previous_gray,
+                        current_gray,
+                        previous_ball_center,
+                        frame.shape,
+                    )
+                    if ball is not None:
+                        optical_flow_ball_samples += 1
+                        ball_flow_streak += 1
+                if ball is not None and ball.get("source") != "optical_flow":
+                    detected_ball_samples += 1
+                    ball_flow_streak = 0
                 if balls and ball is None:
                     ball_rejections += 1
                 close = False
@@ -626,6 +759,23 @@ def analyze_video(data):
                     ball_confidences.append(float(ball["confidence"]))
                     previous_ball_center = ball["center"]
                     close = ball_close_to_player(ball, player)
+                previous_gray = current_gray
+
+                annotated_people = annotate_team_roles(
+                    frame, people, player, reference_signature
+                )
+                annotated_player = next(
+                    (person for person in annotated_people if person.get("role") == "target"),
+                    None,
+                )
+                action_analyzer.observe(
+                    timestamp=timestamp,
+                    player=annotated_player,
+                    people=annotated_people,
+                    ball=ball,
+                    pitch_point=pitch_point,
+                    scene_cut=hard_cut,
+                )
 
                 if close:
                     close_streak += 1
@@ -651,6 +801,8 @@ def analyze_video(data):
                 close_streak = 0
                 far_streak += 1
                 previous_ball_center = None
+                previous_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                ball_flow_streak = 0
                 if possession_started is not None:
                     possession_intervals.append([round(possession_started, 2), round(timestamp, 2)])
                     possession_started = None
@@ -685,6 +837,7 @@ def analyze_video(data):
         )
         coverage = tracking_summary["coverage_percent"]
         ball_visibility = ball_visible_samples / max(1, sampled_frames) * 100.0
+        ball_tracking_coverage = ball_visible_samples / max(1, tracked_samples) * 100.0
         ball_search_coverage = ball_search_samples / max(1, tracked_samples) * 100.0
         mean_ball_confidence = sum(ball_confidences) / max(1, len(ball_confidences))
         mean_track_score = sum(track_scores) / max(1, len(track_scores))
@@ -730,6 +883,13 @@ def analyze_video(data):
             validated_ball_samples=ball_visible_samples,
             validated_touch_events=len(touch_events),
             mean_ball_confidence=mean_ball_confidence,
+        )
+        action_summary = action_analyzer.summary()
+        action_metrics_reliable = (
+            tracking_continuity_reliable
+            and ball_tracking_coverage >= 35.0
+            and detected_ball_samples >= max(6, int(effective_sample_fps * 2))
+            and action_summary["team_classification_confidence_percent"] >= 35.0
         )
         tracked_seconds = tracked_samples / effective_sample_fps
         possession_seconds = possession_samples / effective_sample_fps
@@ -783,6 +943,7 @@ def analyze_video(data):
                 "possession_percent_of_tracked_time": round(
                     possession_seconds / max(0.001, tracked_seconds) * 100.0, 1
                 ),
+                "actions": action_summary,
             },
             "quality": {
                 "score_percent": quality_score,
@@ -799,12 +960,21 @@ def analyze_video(data):
                 "window_coverage_percent": tracking_summary["window_coverage_percent"],
                 "ball_metrics_reliable": ball_metrics_reliable,
                 "ball_visibility_percent": round(ball_visibility, 1),
+                "ball_tracking_coverage_percent": round(ball_tracking_coverage, 1),
                 "ball_search_coverage_percent": round(ball_search_coverage, 1),
                 "validated_ball_samples": ball_visible_samples,
+                "detected_ball_samples": detected_ball_samples,
+                "optical_flow_ball_samples": optical_flow_ball_samples,
                 "mean_ball_confidence": round(mean_ball_confidence, 3),
                 "local_ball_searches": local_ball_searches,
                 "local_ball_hits": local_ball_hits,
+                "global_ball_searches": global_ball_searches,
+                "global_ball_hits": global_ball_hits,
                 "ball_candidate_rejections": ball_rejections,
+                "action_metrics_reliable": action_metrics_reliable,
+                "team_classification_confidence_percent": action_summary[
+                    "team_classification_confidence_percent"
+                ],
                 "mean_identity_appearance_similarity": round(mean_appearance, 3),
                 "reidentification_rate_percent": round(reidentification_rate, 1),
                 "identity_rejection_rate_percent": round(identity_rejection_rate, 1),
@@ -818,10 +988,12 @@ def analyze_video(data):
             # engine results (including this trace).
             "validation": {"tracking_trace": validation_trace},
             "warnings": [
-                "V2.6 analyzes forward from the player-selection frame; pre-selection footage is not included yet.",
+                "V2.7 analyzes forward from the player-selection frame; pre-selection footage is not included yet.",
                 "Tiny-ball recovery uses a dedicated magnified crop around the selected player's action area.",
+                "The ball is reacquired globally at low confidence and bridged for at most three samples with optical flow.",
                 "Broadcast cuts are handled as separate sequences; only confident post-cut identity recoveries are retained.",
                 "Touches and possession remain computer-vision estimates until validated against labelled match footage.",
+                "Action counts and qualitative grades are evidence-based candidates; communication cannot be inferred from silent broadcast images.",
                 "Broadcast-camera identity can still fail after occlusions or cuts without a dedicated re-identification model.",
             ],
         }
@@ -841,6 +1013,11 @@ def analyze_video(data):
         if not ball_metrics_reliable:
             result["warnings"].append(
                 "Ball-derived metrics are below the reliability gate and should not be displayed as verified statistics."
+            )
+
+        if not action_metrics_reliable:
+            result["warnings"].append(
+                "Football action metrics require review because ball coverage or team classification did not pass the strict publication gate."
             )
 
         return result

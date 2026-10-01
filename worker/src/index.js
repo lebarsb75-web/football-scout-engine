@@ -185,6 +185,7 @@ export function publicResult(engineResult) {
     return { status: 'unavailable', reason: 'engine_not_completed', metrics: {} };
   }
   const player = engineResult.player || {};
+  const actions = player.actions || {};
   const quality = engineResult.quality || {};
   const tracking = number(player.tracking_coverage_percent);
   const qualityScore = number(quality.score_percent);
@@ -198,13 +199,28 @@ export function publicResult(engineResult) {
   const longestSequence = number(player.longest_tracked_sequence_seconds);
   const analyzedDuration = number(engineResult.video?.analysis_duration_seconds);
   const usefulPartialTracking = tracking >= 20 && trackedSeconds >= 3 && reliableSegments >= 1;
-  // V2.6 delegates the evidence gate to the inference engine. Requiring ball
+  // V2.7 delegates the evidence gate to the inference engine. Requiring ball
   // visibility on 40% of an entire match wrongly rejects defenders and other
   // players who are rarely near the ball.
   const ballOk = trackingOk && quality.ball_metrics_reliable === true;
+  const actionOk = trackingOk && quality.action_metrics_reliable === true;
+  const hasActionData = actions && typeof actions === 'object' && actions.passes && actions.heatmap;
+  const actionCandidateOk = hasActionData && (usefulPartialTracking || trackingOk);
   const distanceAvailable = trackingOk && calibrationUsed && 'distance_meters_estimated' in player;
   const touchesAvailable = ballOk && 'ball_touches_estimated' in player;
   const possessionAvailable = ballOk && 'possession_seconds_estimated' in player;
+  const actionMetric = (value, options = {}) => {
+    if (!actionCandidateOk || value == null) {
+      return { available: false, reason: 'ball_or_team_evidence_too_low' };
+    }
+    return {
+      available: true,
+      value,
+      confidence: actionOk ? 'estimated' : 'review_required',
+      review_required: !actionOk,
+      ...options,
+    };
+  };
   const clips = [];
   if (ballOk) {
     const rawClips = engineResult.clips || (player.touch_clip_windows_seconds || []).map((window) => ({
@@ -229,6 +245,12 @@ export function publicResult(engineResult) {
       tracking_continuity_reliable: continuityOk,
       tracking_pass: trackingOk,
       ball_metrics_pass: ballOk,
+      action_metrics_pass: actionOk,
+      action_metrics_review_required: actionCandidateOk && !actionOk,
+      ball_tracking_coverage_percent: Number(number(quality.ball_tracking_coverage_percent).toFixed(1)),
+      detected_ball_samples: Math.max(0, Math.trunc(number(quality.detected_ball_samples))),
+      optical_flow_ball_samples: Math.max(0, Math.trunc(number(quality.optical_flow_ball_samples))),
+      team_classification_confidence_percent: Number(number(quality.team_classification_confidence_percent).toFixed(1)),
       pitch_calibration_used: calibrationUsed,
       pitch_calibration_method: calibrationUsed ? String(quality.pitch_calibration_method || 'manual_four_corner') : null,
       scene_cuts_detected: Math.max(0, Math.trunc(number(quality.scene_cuts_detected))),
@@ -249,7 +271,41 @@ export function publicResult(engineResult) {
       possession_seconds: possessionAvailable
         ? { available: true, value: Number(number(player.possession_seconds_estimated).toFixed(1)), confidence: 'estimated' }
         : { available: false, reason: 'ball_or_tracking_quality_too_low' },
+      passes_attempted: actionMetric(Math.max(0, Math.trunc(number(actions.passes?.attempted)))),
+      passes_completed: actionMetric(Math.max(0, Math.trunc(number(actions.passes?.completed)))),
+      passes_failed: actionMetric(Math.max(0, Math.trunc(number(actions.passes?.failed)))),
+      pass_completion_percent: actionMetric(Number(number(actions.passes?.completion_percent).toFixed(1))),
+      progressive_passes: actionMetric(Math.max(0, Math.trunc(number(actions.passes?.progressive)))),
+      build_up_passes: actionMetric(Math.max(0, Math.trunc(number(actions.passes?.build_up)))),
+      interceptions: actionMetric(Math.max(0, Math.trunc(number(actions.interceptions)))),
+      recoveries: actionMetric(Math.max(0, Math.trunc(number(actions.recoveries)))),
+      duels_won: actionMetric(Math.max(0, Math.trunc(number(actions.duels?.won)))),
+      duels_lost: actionMetric(Math.max(0, Math.trunc(number(actions.duels?.lost)))),
+      aerial_duels_won: actionMetric(Math.max(0, Math.trunc(number(actions.duels?.aerial_won)))),
+      aerial_duels_lost: actionMetric(Math.max(0, Math.trunc(number(actions.duels?.aerial_lost)))),
+      tackles: actionMetric(Math.max(0, Math.trunc(number(actions.tackles)))),
+      clearances: actionMetric(Math.max(0, Math.trunc(number(actions.clearances)))),
+      blocks: actionMetric(Math.max(0, Math.trunc(number(actions.blocks)))),
+      turnovers: actionMetric(Math.max(0, Math.trunc(number(actions.turnovers)))),
+      defensive_error_candidates: actionMetric(Math.max(0, Math.trunc(number(actions.defensive_error_candidates)))),
+      average_position: actionMetric(actions.average_position || null),
+      heatmap: actionMetric(actions.heatmap || null),
+      max_speed_kmh: distanceAvailable && actions.max_speed_kmh != null
+        ? { available: true, value: Number(number(actions.max_speed_kmh).toFixed(1)), confidence: 'estimated' }
+        : { available: false, reason: calibrationUsed ? 'tracking_quality_too_low' : 'pitch_calibration_required' },
+      qualitative: actionMetric(actions.qualitative || null, { methodology: 'automated_candidate_grades' }),
     },
+    action_events: actionCandidateOk && Array.isArray(actions.events)
+      ? actions.events
+        .filter((event) => event && typeof event.type === 'string' && Number.isFinite(Number(event.timestamp_seconds)))
+        .slice(0, 500)
+        .map((event) => ({
+          type: String(event.type),
+          timestamp_seconds: Number(number(event.timestamp_seconds).toFixed(2)),
+          confidence: Number(number(event.confidence).toFixed(3)),
+          review_required: !actionOk,
+        }))
+      : [],
     clips,
     notice: 'Les statistiques ne sont affichées que lorsque les contrôles qualité sont franchis.',
   };

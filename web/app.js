@@ -533,11 +533,13 @@ function metricCard(title, metric, formatter, reason) {
       pitch_calibration_required: 'Calibre les 4 coins du terrain avant l’analyse',
       tracking_quality_too_low: 'Continuité du suivi insuffisante',
       ball_or_tracking_quality_too_low: 'Preuves ballon insuffisantes',
+      ball_or_team_evidence_too_low: 'Ballon ou équipes insuffisamment identifiés',
     };
     const detail = reasons[metric?.reason] || reason;
     return `<article class="metric-card locked"><span>${title}</span><strong>Masquée</strong><small>🔒 ${detail}</small></article>`;
   }
-  return `<article class="metric-card"><span>${title}</span><strong>${formatter(metric.value)}</strong><small>✓ Contrôle de fiabilité passé</small></article>`;
+  const review = metric.review_required || metric.confidence === 'review_required';
+  return `<article class="metric-card ${review ? 'candidate' : ''}"><span>${title}</span><strong>${formatter(metric.value)}</strong><small>${review ? '◐ Détection automatique à vérifier' : '✓ Contrôle de fiabilité passé'}</small></article>`;
 }
 
 function diagnosticCard(title, metric, formatter, detail) {
@@ -547,7 +549,7 @@ function diagnosticCard(title, metric, formatter, detail) {
 
 function analysisSampleFps(durationSeconds) {
   const duration = Number(durationSeconds) || 0;
-  if (duration > 30 * 60) return 5;
+  if (duration > 30 * 60) return 4;
   if (duration > 10 * 60) return 7;
   return 10;
 }
@@ -566,6 +568,42 @@ function renderClips(clips) {
   if (!clips?.length) return '';
   const items = clips.map((clip, index) => `<li><span>${String(index + 1).padStart(2, '0')}</span><div><strong>${clip.type === 'possession' ? 'Séquence de possession' : 'Contact avec le ballon'}</strong><small>${formatTime(Number(clip.start))} → ${formatTime(Number(clip.end))}</small></div></li>`).join('');
   return `<section class="clips-section"><div><p class="eyebrow">SÉQUENCES</p><h2>Moments détectés</h2><p>Ces fenêtres sont proposées uniquement lorsque le contrôle du ballon est validé.</p></div><ol>${items}</ol></section>`;
+}
+
+const actionLabels = {
+  pass_completed: 'Passe réussie',
+  pass_failed: 'Passe ratée',
+  interception: 'Interception',
+  recovery: 'Récupération',
+  duel_won: 'Duel gagné',
+  duel_lost: 'Duel perdu',
+  tackle: 'Tacle',
+  clearance: 'Dégagement',
+  block: 'Contre',
+  turnover: 'Perte de balle',
+};
+
+function renderHeatmap(metric) {
+  if (!metric?.available || !metric.value?.values?.length) {
+    return '<div class="heatmap-card locked"><strong>Carte de chaleur indisponible</strong><small>Suivi joueur insuffisant.</small></div>';
+  }
+  const cells = metric.value.values.flat().map((value) => `<i style="--intensity:${Math.max(0.04, Number(value) || 0)}"></i>`).join('');
+  const review = metric.review_required ? '<small>◐ Position caméra normalisée · à vérifier</small>' : '<small>✓ Position caméra normalisée</small>';
+  return `<div class="heatmap-card"><div><strong>Carte de chaleur</strong>${review}</div><div class="heatmap-grid" style="--columns:${Number(metric.value.columns) || 12}">${cells}</div><span>But</span><span>But</span></div>`;
+}
+
+function renderQualitative(metric) {
+  const values = metric?.value || {};
+  const score = (label, value) => value == null
+    ? `<article class="grade-card locked"><span>${label}</span><strong>—</strong><small>Non mesurable sur l’image seule</small></article>`
+    : `<article class="grade-card ${metric.review_required ? 'candidate' : ''}"><span>${label}</span><strong>${Number(value).toFixed(1)}<small>/10</small></strong><small>${metric.review_required ? '◐ Proposition à valider' : '✓ Indice automatique'}</small></article>`;
+  return `<div class="grade-grid">${score('Placement', values.placement)}${score('Anticipation', values.anticipation)}${score('Agressivité', values.aggression)}${score('Communication', values.communication)}${score('Qualité de relance', values.buildup_quality)}</div>`;
+}
+
+function renderActionEvents(events) {
+  if (!events?.length) return '';
+  const items = events.slice(0, 40).map((event) => `<li><span>${formatTime(Number(event.timestamp_seconds))}</span><strong>${escapeHtml(actionLabels[event.type] || event.type)}</strong><small>${Math.round(Number(event.confidence || 0) * 100)} % · ${event.review_required ? 'à vérifier' : 'validé par les seuils'}</small></li>`).join('');
+  return `<section class="events-section"><div><p class="eyebrow">PREUVES VIDÉO</p><h2>Chronologie des actions</h2><p>Les instants permettent de contrôler chaque action dans la vidéo source.</p></div><ol>${items}</ol></section>`;
 }
 
 function renderResult(result, rawSummary = {}, job = state.activeJob) {
@@ -598,10 +636,17 @@ function renderResult(result, rawSummary = {}, job = state.activeJob) {
   const explanation = partial
     ? 'La vidéo a été analysée par séquences. Les passages fiables restent visibles, sans transformer les changements de caméra ou les pertes de suivi en statistiques certaines.'
     : `La distance exige une calibration valide. Le détecteur dédié a recherché le ballon sur ${ballSearchCoverage.toFixed(1)} % des images suivies ; touches et possession ne sont affichées qu’avec plusieurs observations cohérentes.`;
+  const count = (key) => metricCard(key[0], metrics[key[1]], (value) => String(value), key[2]);
+  const actionReview = quality.action_metrics_review_required;
   $('#result-content').innerHTML = `
     <div class="result-head"><div><p class="eyebrow">RAPPORT JOUEUR</p><h1>${playerName}</h1><p>${context || 'Analyse individuelle terminée.'}</p></div><span class="quality-pill">${partial ? '◐' : '✓'} ${badge}</span></div>
     <div class="result-summary"><div class="quality-score"><span>Qualité du suivi</span><strong>${trackingScore.toFixed(0)}<small>%</small></strong><p>Couverture : ${coverage.toFixed(1)} %</p><small class="engine-label">Moteur ${escapeHtml(result.engine_version || '—')}</small></div><div class="metrics-grid">${diagnosticCard('Temps réellement suivi', metrics.tracked_time_seconds, (value) => formatTime(value), 'Mesuré sur les images retenues')}${diagnosticCard('Séquences fiables', metrics.reliable_sequences, (value) => String(value), 'Passages continus du joueur')}${diagnosticCard('Meilleure séquence', metrics.longest_sequence_seconds, (value) => formatTime(value), 'Plus longue continuité détectée')}${metricCard('Distance parcourue', metrics.distance_meters, (value) => `${(value / 1000).toFixed(2).replace('.', ',')} km`, 'Calibration terrain requise')}${metricCard('Touches de balle', metrics.ball_touches, (value) => String(value), 'Visibilité ballon insuffisante')}${metricCard('Temps de possession', metrics.possession_seconds, (value) => formatTime(value), 'Contrôle ballon non atteint')}</div></div>
     <section class="quality-explain"><div><p class="eyebrow">TRANSPARENCE</p><h2>${partial ? 'Ce que la vidéo permet réellement d’analyser' : 'Pourquoi certaines données sont masquées'}</h2><p>${explanation}</p></div><div class="gate-list"><span class="${quality.tracking_continuity_reliable ? 'pass' : 'locked'}">${quality.tracking_continuity_reliable ? '✓' : '◐'} Continuité joueur</span><span class="${quality.ball_metrics_pass ? 'pass' : 'locked'}">${quality.ball_metrics_pass ? '✓' : '—'} Ballon</span><span class="${quality.pitch_calibration_used ? 'pass' : 'locked'}">${quality.pitch_calibration_used ? '✓' : '—'} Calibration</span></div></section>
+    <section class="report-section"><div class="section-heading compact"><p class="eyebrow">JEU AVEC BALLON</p><h2>Passes, relances et pertes</h2><p>${actionReview ? 'Ces chiffres sont des candidats automatiques à contrôler dans la chronologie.' : 'Les contrôles ballon et équipes ont franchi leurs seuils.'}</p></div><div class="metrics-grid action-grid">${count(['Passes tentées', 'passes_attempted', 'Suivi du ballon requis'])}${count(['Passes réussies', 'passes_completed', 'Suivi du ballon requis'])}${count(['Passes ratées', 'passes_failed', 'Suivi du ballon requis'])}${metricCard('Réussite', metrics.pass_completion_percent, (value) => `${Number(value).toFixed(1)} %`, 'Suivi du ballon requis')}${count(['Passes progressives', 'progressive_passes', 'Sens du jeu non déterminé'])}${count(['Relances depuis le tiers défensif', 'build_up_passes', 'Position insuffisante'])}${count(['Pertes de balle', 'turnovers', 'Suivi du ballon requis'])}</div></section>
+    <section class="report-section"><div class="section-heading compact"><p class="eyebrow">DÉFENSE</p><h2>Récupérations, duels et interventions</h2></div><div class="metrics-grid action-grid">${count(['Interceptions', 'interceptions', 'Ballon insuffisamment suivi'])}${count(['Récupérations', 'recoveries', 'Ballon insuffisamment suivi'])}${count(['Duels gagnés', 'duels_won', 'Adversaire non identifié'])}${count(['Duels perdus', 'duels_lost', 'Adversaire non identifié'])}${count(['Duels aériens gagnés', 'aerial_duels_won', 'Ballon non localisé'])}${count(['Duels aériens perdus', 'aerial_duels_lost', 'Ballon non localisé'])}${count(['Tacles', 'tackles', 'Action non confirmée'])}${count(['Dégagements', 'clearances', 'Action non confirmée'])}${count(['Contres', 'blocks', 'Trajectoire ballon insuffisante'])}${count(['Erreurs défensives candidates', 'defensive_error_candidates', 'Position insuffisante'])}</div></section>
+    <section class="report-section position-section"><div class="section-heading compact"><p class="eyebrow">POSITION & ATHLÉTIQUE</p><h2>Occupation du terrain</h2></div><div class="position-layout">${renderHeatmap(metrics.heatmap)}<div class="metrics-grid">${metricCard('Position moyenne', metrics.average_position, (value) => `${Math.round(value.x * 100)} % · ${Math.round(value.y * 100)} %`, 'Suivi insuffisant')}${metricCard('Vitesse maximale', metrics.max_speed_kmh, (value) => `${Number(value).toFixed(1)} km/h`, 'Calibration terrain requise')}</div></div></section>
+    <section class="report-section"><div class="section-heading compact"><p class="eyebrow">LECTURE QUALITATIVE</p><h2>Indices de scouting</h2><p>Ce sont des aides à la revue vidéo, pas un jugement humain. La communication reste non évaluée sans son ni annotation.</p></div>${renderQualitative(metrics.qualitative)}</section>
+    ${renderActionEvents(result.action_events)}
     ${renderClips(result.clips)}
     <div class="action-row result-actions"><button class="secondary" id="download-json">Rapport JSON</button><button class="secondary" id="download-csv">Exporter en CSV</button><button class="primary" id="new-analysis">Nouvelle analyse</button></div>`;
   $('#new-analysis').addEventListener('click', newAnalysis);
@@ -650,6 +695,31 @@ function downloadReport(format) {
     ['distance_metres', metrics.distance_meters?.available ? metrics.distance_meters.value : 'masquee'],
     ['touches_balle', metrics.ball_touches?.available ? metrics.ball_touches.value : 'masquee'],
     ['possession_secondes', metrics.possession_seconds?.available ? metrics.possession_seconds.value : 'masquee'],
+    ['passes_tentees', metrics.passes_attempted?.available ? metrics.passes_attempted.value : 'masquee'],
+    ['passes_reussies', metrics.passes_completed?.available ? metrics.passes_completed.value : 'masquee'],
+    ['passes_ratees', metrics.passes_failed?.available ? metrics.passes_failed.value : 'masquee'],
+    ['reussite_passes_pourcent', metrics.pass_completion_percent?.available ? metrics.pass_completion_percent.value : 'masquee'],
+    ['passes_progressives', metrics.progressive_passes?.available ? metrics.progressive_passes.value : 'masquee'],
+    ['relances_tiers_defensif', metrics.build_up_passes?.available ? metrics.build_up_passes.value : 'masquee'],
+    ['interceptions', metrics.interceptions?.available ? metrics.interceptions.value : 'masquee'],
+    ['recuperations', metrics.recoveries?.available ? metrics.recoveries.value : 'masquee'],
+    ['duels_gagnes', metrics.duels_won?.available ? metrics.duels_won.value : 'masquee'],
+    ['duels_perdus', metrics.duels_lost?.available ? metrics.duels_lost.value : 'masquee'],
+    ['duels_aeriens_gagnes', metrics.aerial_duels_won?.available ? metrics.aerial_duels_won.value : 'masquee'],
+    ['duels_aeriens_perdus', metrics.aerial_duels_lost?.available ? metrics.aerial_duels_lost.value : 'masquee'],
+    ['tacles', metrics.tackles?.available ? metrics.tackles.value : 'masquee'],
+    ['degagements', metrics.clearances?.available ? metrics.clearances.value : 'masquee'],
+    ['contres', metrics.blocks?.available ? metrics.blocks.value : 'masquee'],
+    ['pertes_balle', metrics.turnovers?.available ? metrics.turnovers.value : 'masquee'],
+    ['erreurs_defensives_candidates', metrics.defensive_error_candidates?.available ? metrics.defensive_error_candidates.value : 'masquee'],
+    ['vitesse_max_kmh', metrics.max_speed_kmh?.available ? metrics.max_speed_kmh.value : 'masquee'],
+    ['position_moyenne_x', metrics.average_position?.available ? metrics.average_position.value.x : 'masquee'],
+    ['position_moyenne_y', metrics.average_position?.available ? metrics.average_position.value.y : 'masquee'],
+    ['note_placement_sur_10', metrics.qualitative?.available ? metrics.qualitative.value.placement : 'masquee'],
+    ['note_anticipation_sur_10', metrics.qualitative?.available ? metrics.qualitative.value.anticipation : 'masquee'],
+    ['note_agressivite_sur_10', metrics.qualitative?.available ? metrics.qualitative.value.aggression : 'masquee'],
+    ['note_communication_sur_10', metrics.qualitative?.available && metrics.qualitative.value.communication != null ? metrics.qualitative.value.communication : 'non_evaluable'],
+    ['note_relance_sur_10', metrics.qualitative?.available ? metrics.qualitative.value.buildup_quality : 'masquee'],
   ];
   const csv = `\uFEFF${rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(';')).join('\n')}`;
   downloadBlob(reportFilename('csv'), 'text/csv;charset=utf-8', csv);
