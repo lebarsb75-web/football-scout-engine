@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://football-scout.local/contracts/analysis-input.schema.json",
+  "title": "Football Scout analysis input",
+  "type": "object",
+  "required": ["input"],
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "type": "object",
+      "required": ["video_url", "target", "target_time_seconds"],
+      "additionalProperties": true,
+      "properties": {
+        "video_url": {"type": "string", "minLength": 8},
+        "target": {
+          "type": "object",
+          "required": ["x", "y"],
+          "additionalProperties": false,
+          "properties": {
+            "x": {"type": "number", "minimum": 0, "maximum": 1},
+            "y": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        },
+        "target_time_seconds": {"type": "number", "minimum": 0},
+        "sample_fps": {"type": "number", "minimum": 1, "maximum": 10, "default": 5},
+        "confidence": {"type": "number", "minimum": 0.1, "maximum": 0.9, "default": 0.22},
+        "image_size": {"type": "integer", "minimum": 640, "maximum": 1280, "default": 960},
+        "max_video_mb": {"type": "integer", "minimum": 100, "maximum": 8192, "default": 4096},
+        "pitch_calibration": {
+          "type": "object",
+          "required": ["static_camera", "image_points", "pitch_points_meters"],
+          "properties": {
+            "static_camera": {"const": true},
+            "image_points": {
+              "type": "array",
+              "minItems": 4,
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number"}, {"type": "number"}],
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "pitch_points_meters": {
+              "type": "array",
+              "minItems": 4,
+              "items": {
+                "type": "array",
+                "prefixItems": [{"type": "number"}, {"type": "number"}],
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

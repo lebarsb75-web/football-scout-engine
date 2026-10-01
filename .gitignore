@@ -1,0 +1,33 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+api/.env
+worker/.dev.vars
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+.wrangler/
+
+# Local uploads, generated clips and reports
+uploads/
+output/
+outputs/
+clips/
+reports/
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.pt
+
+# Local tooling / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

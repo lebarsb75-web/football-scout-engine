@@ -1,0 +1,48 @@
+{
+  "status": "completed",
+  "engine_version": "2.1-dev",
+  "model": "yolo11m.pt",
+  "processing_seconds": 0,
+  "video": {
+    "duration_seconds": 600,
+    "width": 1920,
+    "height": 1080,
+    "source_fps": 25,
+    "sample_fps": 5,
+    "sampled_frames": 3000,
+    "downloaded_mb": 420
+  },
+  "selection": {
+    "target_time_seconds": 35.4,
+    "target": {"x": 0.47, "y": 0.62},
+    "anchor_detection_distance_pixels": 12.3
+  },
+  "player": {
+    "last_track_id": 7,
+    "tracking_coverage_percent": 88.1,
+    "tracked_seconds_estimated": 528.6,
+    "reidentifications": 6,
+    "identity_rejections": 2,
+    "distance_pixels_estimated": 18231.4,
+    "ball_touches_estimated": 22,
+    "touch_timestamps_seconds": [52.4, 74.8, 118.2],
+    "touch_clip_windows_seconds": [[48.4, 56.4], [70.8, 78.8], [114.2, 122.2]],
+    "possession_seconds_estimated": 31.8,
+    "possession_intervals_seconds": [[52.4, 53.6], [74.8, 76.2]],
+    "possession_percent_of_tracked_time": 6.0
+  },
+  "quality": {
+    "score_percent": 84.3,
+    "label": "good",
+    "review_required": false,
+    "ball_metrics_reliable": true,
+    "ball_visibility_percent": 46.2,
+    "mean_identity_appearance_similarity": 0.71,
+    "scene_cuts_detected": 4,
+    "rejected_tracking_jumps": 7,
+    "pitch_calibration_used": false
+  },
+  "warnings": [
+    "Example response only: values are illustrative and are not measurements from a real match."
+  ]
+}

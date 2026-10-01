@@ -1,0 +1,197 @@
+from copy import deepcopy
+from typing import Any
+
+
+MIN_TRACKING_COVERAGE = 80.0
+MIN_PLAYER_TRACKING_QUALITY = 82.0
+
+
+def _number(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def public_result(engine_result: dict[str, Any]) -> dict[str, Any]:
+    """Convert raw engine output into a user-facing, fail-closed result.
+
+    Raw computer-vision values are not automatically treated as trustworthy.
+    Each metric is exposed only when the evidence needed for that metric clears
+    explicit thresholds. The raw result can still be retained for internal QA.
+    """
+    if engine_result.get("status") != "completed":
+        return {
+            "status": "unavailable",
+            "reason": "engine_not_completed",
+            "metrics": {},
+        }
+
+    player = engine_result.get("player") or {}
+    actions = player.get("actions") or {}
+    quality = engine_result.get("quality") or {}
+    tracking = _number(player.get("tracking_coverage_percent"))
+    ball_visibility = _number(quality.get("ball_visibility_percent"))
+    quality_score = _number(quality.get("score_percent"))
+    player_quality = _number(
+        quality.get("player_tracking_score_percent"), default=quality_score
+    )
+    calibration_used = bool(quality.get("pitch_calibration_used"))
+
+    # Fail closed: public statistics require the engine's explicit continuity
+    # verdict. A high average coverage alone can hide a long identity loss.
+    continuity_ok = quality.get("tracking_continuity_reliable") is True
+    tracking_ok = (
+        tracking >= MIN_TRACKING_COVERAGE
+        and player_quality >= MIN_PLAYER_TRACKING_QUALITY
+        and continuity_ok
+    )
+    ball_ok = tracking_ok and quality.get("ball_metrics_reliable") is True
+    action_ok = tracking_ok and quality.get("action_metrics_reliable") is True
+    has_action_data = isinstance(actions.get("passes"), dict) and isinstance(
+        actions.get("heatmap"), dict
+    )
+
+    def action_metric(value):
+        if not tracking_ok or not has_action_data or value is None:
+            return {"available": False, "reason": "ball_or_team_evidence_too_low"}
+        return {
+            "available": True,
+            "value": value,
+            "confidence": "estimated" if action_ok else "review_required",
+            "review_required": not action_ok,
+        }
+
+    metrics: dict[str, Any] = {
+        "tracking_coverage_percent": {
+            "available": True,
+            "value": round(tracking, 1),
+            "confidence": "diagnostic",
+        },
+        "distance_meters": {
+            "available": bool(tracking_ok and calibration_used and "distance_meters_estimated" in player),
+        },
+        "ball_touches": {
+            "available": bool(ball_ok and "ball_touches_estimated" in player),
+        },
+        "possession_seconds": {
+            "available": bool(ball_ok and "possession_seconds_estimated" in player),
+        },
+    }
+
+    if metrics["distance_meters"]["available"]:
+        metrics["distance_meters"].update(
+            value=round(_number(player["distance_meters_estimated"]), 1),
+            confidence="estimated",
+        )
+    else:
+        metrics["distance_meters"]["reason"] = (
+            "pitch_calibration_required" if not calibration_used else "tracking_quality_too_low"
+        )
+
+    if metrics["ball_touches"]["available"]:
+        metrics["ball_touches"].update(
+            value=int(player["ball_touches_estimated"]),
+            confidence="estimated",
+        )
+    else:
+        metrics["ball_touches"]["reason"] = "ball_or_tracking_quality_too_low"
+
+    if metrics["possession_seconds"]["available"]:
+        metrics["possession_seconds"].update(
+            value=round(_number(player["possession_seconds_estimated"]), 1),
+            confidence="estimated",
+        )
+    else:
+        metrics["possession_seconds"]["reason"] = "ball_or_tracking_quality_too_low"
+
+    passes = actions.get("passes") or {}
+    duels = actions.get("duels") or {}
+    action_values = {
+        "passes_attempted": int(_number(passes.get("attempted"))),
+        "passes_completed": int(_number(passes.get("completed"))),
+        "passes_failed": int(_number(passes.get("failed"))),
+        "pass_completion_percent": round(_number(passes.get("completion_percent")), 1),
+        "progressive_passes": int(_number(passes.get("progressive"))),
+        "build_up_passes": int(_number(passes.get("build_up"))),
+        "interceptions": int(_number(actions.get("interceptions"))),
+        "recoveries": int(_number(actions.get("recoveries"))),
+        "duels_won": int(_number(duels.get("won"))),
+        "duels_lost": int(_number(duels.get("lost"))),
+        "aerial_duels_won": int(_number(duels.get("aerial_won"))),
+        "aerial_duels_lost": int(_number(duels.get("aerial_lost"))),
+        "tackles": int(_number(actions.get("tackles"))),
+        "clearances": int(_number(actions.get("clearances"))),
+        "blocks": int(_number(actions.get("blocks"))),
+        "turnovers": int(_number(actions.get("turnovers"))),
+        "defensive_error_candidates": int(
+            _number(actions.get("defensive_error_candidates"))
+        ),
+        "average_position": actions.get("average_position"),
+        "heatmap": actions.get("heatmap"),
+        "qualitative": actions.get("qualitative"),
+    }
+    metrics.update({key: action_metric(value) for key, value in action_values.items()})
+    metrics["max_speed_kmh"] = (
+        action_metric(round(_number(actions.get("max_speed_kmh")), 1))
+        if calibration_used and actions.get("max_speed_kmh") is not None
+        else {
+            "available": False,
+            "reason": "pitch_calibration_required"
+            if not calibration_used
+            else "tracking_quality_too_low",
+        }
+    )
+
+    public_clips = []
+    if ball_ok:
+        raw_clips = engine_result.get("clips")
+        if raw_clips is None:
+            # The inference worker emits compact touch windows under the player
+            # object. Keep accepting a top-level list for forward compatibility.
+            raw_clips = [
+                {"type": "touch", "start": window[0], "end": window[1]}
+                for window in (player.get("touch_clip_windows_seconds") or [])
+                if isinstance(window, (list, tuple)) and len(window) == 2
+            ]
+        for clip in deepcopy(raw_clips or []):
+            if isinstance(clip, dict) and clip.get("type") in {"touch", "possession"}:
+                public_clips.append(clip)
+
+    return {
+        "status": "ready" if tracking_ok else "review_required",
+        "engine_version": engine_result.get("engine_version"),
+        "quality": {
+            "score_percent": round(quality_score, 1),
+            "player_tracking_score_percent": round(player_quality, 1),
+            "tracking_coverage_percent": round(tracking, 1),
+            "ball_visibility_percent": round(ball_visibility, 1),
+            "ball_search_coverage_percent": round(
+                _number(quality.get("ball_search_coverage_percent")), 1
+            ),
+            "validated_ball_samples": int(
+                _number(quality.get("validated_ball_samples"))
+            ),
+            "tracking_continuity_reliable": continuity_ok,
+            "tracking_pass": tracking_ok,
+            "ball_metrics_pass": ball_ok,
+            "action_metrics_pass": action_ok,
+            "action_metrics_review_required": bool(has_action_data and not action_ok),
+            "ball_tracking_coverage_percent": round(
+                _number(quality.get("ball_tracking_coverage_percent")), 1
+            ),
+            "team_classification_confidence_percent": round(
+                _number(quality.get("team_classification_confidence_percent")), 1
+            ),
+            "pitch_calibration_used": calibration_used,
+            "pitch_calibration_method": (
+                quality.get("pitch_calibration_method") if calibration_used else None
+            ),
+        },
+        "metrics": metrics,
+        "action_events": deepcopy(actions.get("events") or [])[:500]
+        if has_action_data
+        else [],
+        "clips": public_clips,
+        "notice": "Computer-vision statistics are estimates and are exposed only when quality gates pass.",
+    }
