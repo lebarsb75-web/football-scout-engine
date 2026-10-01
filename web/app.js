@@ -827,3 +827,4 @@ addEventListener('beforeunload', () => {
   state.uploadController?.abort();
   clearTimeout(state.pollTimer);
 });
+// Deployment trigger: Football Scout V2.7 action report
