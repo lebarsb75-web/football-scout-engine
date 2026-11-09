@@ -1,0 +1,44 @@
+{
+  "benchmark": {
+    "environment": "local CPU",
+    "ground_truth_available": false,
+    "purpose": "Reproducible internal continuity gate before paid GPU validation",
+    "source": "https://raw.githubusercontent.com/AtomScott/SoccerTrack-v2/main/docs/assets/demo-gsr_and_bas.mp4"
+  },
+  "request": {
+    "target_time_seconds": 4.0,
+    "target": {"x": 0.5949, "y": 0.3501},
+    "sample_fps": 10,
+    "confidence": 0.15,
+    "image_size": 960,
+    "max_video_mb": 100
+  },
+  "result": {
+    "engine_version": "2.4-dev",
+    "model": "yolo11m.pt",
+    "processing_seconds": 53.58,
+    "analysis_duration_seconds": 26.0,
+    "source_fps": 25.0,
+    "requested_sample_fps": 10.0,
+    "effective_sample_fps": 10.0,
+    "sampled_frames": 260,
+    "tracking_coverage_percent": 97.3,
+    "minimum_window_coverage_percent": 97.3,
+    "longest_untracked_gap_seconds": 0.7,
+    "player_tracking_score_percent": 96.5,
+    "reidentification_rate_percent": 5.0,
+    "identity_rejection_rate_percent": 0.0,
+    "scene_cuts_detected": 0,
+    "tracking_continuity_reliable": true,
+    "quality_label": "good",
+    "ball_visibility_percent": 9.2,
+    "ball_metrics_reliable": false,
+    "pitch_calibration_used": false
+  },
+  "interpretation": {
+    "player_tracking_gate": "passed internally",
+    "ball_gate": "failed closed",
+    "metric_distance_gate": "failed closed",
+    "reliability_claim": "Not a ground-truth accuracy result; annotated validation is still required."
+  }
+}

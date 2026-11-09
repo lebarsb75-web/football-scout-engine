@@ -1,0 +1,15 @@
+{
+  "input": {
+    "video_url": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Kylian_Mbappe_at_Real_Madrid%27s_UEFA_Champions_League_game_versus_Juventus_Turin_on_22_October_2025_(video).webm",
+    "target_time_seconds": 1.5,
+    "target": {"x": 0.5, "y": 0.5},
+    "sample_fps": 3,
+    "confidence": 0.22,
+    "image_size": 640,
+    "max_video_mb": 100
+  },
+  "policy": {
+    "executionTimeout": 120000,
+    "ttl": 300000
+  }
+}

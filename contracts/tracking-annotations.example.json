@@ -1,0 +1,15 @@
+{
+  "sequence_id": "replace-with-stable-sequence-id",
+  "annotator": "independent-reviewer-id",
+  "frames": [
+    {
+      "timestamp_seconds": 4.0,
+      "target_visible": true,
+      "center": {"x": 0.5949, "y": 0.3501}
+    },
+    {
+      "timestamp_seconds": 4.1,
+      "target_visible": false
+    }
+  ]
+}
